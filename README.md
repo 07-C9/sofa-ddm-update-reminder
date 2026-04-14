@@ -5,7 +5,7 @@ release data with Apple's DDM enforcement state to show users the right
 version at the right time.
 
 <p align="center">
-  <img src="screenshots/dialog.png" alt="Update reminder dialog showing DDM enforcement" width="640">
+  <img src="screenshots/dialog.png" alt="Update reminder dialog showing DDM enforcement">
 </p>
 
 ## What it does
