@@ -10,20 +10,26 @@ version at the right time.
 
 ## What it does
 
-- Fetches the SOFA feed from [macadmins.io](https://sofafeed.macadmins.io/v2/macos_data_feed.json)
-  and picks the newest macOS release this specific hardware supports - including
-  cross-version targeting (a macOS 15 machine whose hardware supports Tahoe gets
-  pointed at Tahoe, not stuck on 15).
-- Reads Apple's `SoftwareUpdateDDMStatePersistence.plist` to detect both
-  scheduled MDM pushes and Blueprint enforcement. When DDM enforcement is
-  active, the dialog switches to a more urgent layout with the deadline and
-  days remaining.
+- **Works with or without DDM.** The core design goal: keep users moving
+  toward the latest macOS regardless of whether an MDM enforcement policy is
+  in place. The script uses the SOFA feed as the source of truth for "what is
+  the newest macOS release this specific hardware supports," so even machines
+  with no active DDM declaration still get a correct, hardware-aware nudge
+  when they fall behind. Dan Snelson's DDM Update Reminder, which this script
+  was inspired by, only fires in response to an active DDM declaration - so
+  it's silent on machines that are out of date but haven't been pushed a
+  deadline yet. SOFA closes that gap.
+- **Hardware-aware targeting.** SOFA's `SupportedDevices` drives the version
+  recommendation per board ID, so a Neo-only release isn't offered to non-Neo
+  hardware, and a Tahoe-capable machine stuck on Sequoia is pointed at Tahoe.
+- **DDM overlay when present.** Reads Apple's
+  `SoftwareUpdateDDMStatePersistence.plist` to detect both scheduled MDM
+  pushes and Blueprint "enforce latest within N days" policies. When DDM
+  enforcement is active, the dialog switches to a more urgent layout with the
+  deadline and days remaining.
 - Opens System Settings > Software Update for the user and shows a
-  SwiftDialog window with the required version, deadline, and a link to your
-  support desk.
-- Refuses to ever recommend a downgrade. If SOFA returns nonsense, the script
-  exits clean with a `WARNING:` log line rather than showing the user a
-  confusing dialog.
+  SwiftDialog window with the required version, deadline (if any), and a
+  link to your support desk.
 
 ## Requirements
 
@@ -45,9 +51,20 @@ version at the right time.
    - `cautionIcon` - which system icon overlays the dialog during DDM
      enforcement. Default is `AlertStopIcon.icns` (red stop sign);
      `AlertCautionIcon.icns` is a yellow triangle.
-3. Scope to the machines that should receive reminders. A daily policy works
-   well; the script exits fast when the machine is already up to date, so
-   there's no harm in running frequently.
+3. Scope to a smart computer group built on patch management criteria for
+   the current macOS target. Example: "1, Tahoe = Outdated":
+
+   <p align="center">
+     <img src="screenshots/smart-group.png" alt="Jamf smart group using patch reporting criteria" width="600">
+   </p>
+
+   Criteria: `Patch Reporting: Apple macOS Tahoe is not "Latest Version"`
+   **AND** `Patch Reporting: Apple macOS Tahoe is not "Unknown Version"`.
+   This pulls in every machine Jamf knows is behind on Tahoe, while excluding
+   machines whose patch status isn't yet known (new enrollments, offline,
+   etc.). The script then does the fine-grained per-device targeting via SOFA
+   inside that group. A daily policy works well; the script exits fast when
+   the machine is already up to date, so there's no harm running frequently.
 
 ### Testing locally
 
