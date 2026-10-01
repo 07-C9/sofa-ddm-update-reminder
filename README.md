@@ -1,8 +1,9 @@
 # SOFA + DDM Update Reminder
 
-A Jamf-deployable macOS update reminder that combines SOFA's hardware-aware
-release data with Apple's DDM enforcement state to show users the right
-version at the right time.
+A Jamf-deployable macOS update reminder. It uses SOFA's release data to work
+out the newest macOS each Mac's hardware supports, reads Apple's DDM
+enforcement state, and shows a swiftDialog reminder with a button that opens
+Software Update.
 
 <p align="center">
   <img src="screenshots/dialog.png" alt="Update reminder dialog showing DDM enforcement" width="640">
@@ -10,49 +11,45 @@ version at the right time.
 
 ## What it does
 
-- **Works with or without DDM.** The core design goal: keep users moving
-  toward the latest macOS regardless of whether an MDM enforcement policy is
-  in place. The script uses the SOFA feed as the source of truth for "what is
-  the newest macOS release this specific hardware supports," so even machines
-  with no active DDM declaration still get a correct, hardware-aware nudge
-  when they fall behind. Dan Snelson's DDM Update Reminder, which this script
-  was inspired by, only fires in response to an active DDM declaration - so
-  it's silent on machines that are out of date but haven't been pushed a
-  deadline yet. SOFA closes that gap.
-- **Hardware-aware targeting.** SOFA's `SupportedDevices` drives the version
-  recommendation per board ID, so a Neo-only release isn't offered to non-Neo
-  hardware, and a Tahoe-capable machine stuck on Sequoia is pointed at Tahoe.
-- **DDM overlay when present.** Reads Apple's
-  `SoftwareUpdateDDMStatePersistence.plist` to detect both scheduled MDM
-  pushes and Blueprint "enforce latest within N days" policies. When DDM
-  enforcement is active, the dialog switches to a more urgent layout with the
-  deadline and days remaining.
-- Opens System Settings > Software Update for the user and shows a
-  SwiftDialog window with the required version, deadline (if any), and a
-  link to your support desk.
+- **DDM enforcement.** When a DDM declaration (a scheduled MDM push or a
+  Blueprint "enforce latest within N days" policy) is ordering an update, the
+  dialog names the enforced version, the deadline and the days remaining. It
+  never mentions a release newer than the one being enforced.
+- **No enforcement.** The script nudges toward the newest release this
+  hardware supports, but only after that release has cleared a release hold
+  (2 days by default) and Software Update on the Mac is actually offering it.
+  If Software Update is still deferring a release, the script shows nothing.
+- **Hardware-aware targeting.** SOFA's `SupportedDevices` drives the
+  recommendation per board ID, so a Neo-only release isn't offered to other
+  hardware, and a Tahoe-capable Mac still on Sequoia is pointed at Tahoe.
+- **Version pin.** Jamf script parameter 4 caps the recommendation at a major
+  version (for example `26` while macOS 27 is held back). A Mac already on a
+  newer major than the pin is capped at its own major instead, so it still
+  gets that major's updates.
+- **Timing.** The dialog waits while a meeting or presentation is on screen
+  (up to 75 minutes), skips the day if the user already chose Install Tonight
+  for that version, and opens Software Update only when the user clicks
+  **Open Software Update**. **Later** closes the dialog.
 
 ## Requirements
 
-- macOS 14 or newer (tested on 14, 15, 26)
-- [SwiftDialog](https://github.com/swiftDialog/swiftDialog) at
+- macOS 14 or newer (tested on 14, 15 and 26)
+- [swiftDialog](https://github.com/swiftDialog/swiftDialog) at
   `/usr/local/bin/dialog`
-- Jamf Pro (or any MDM that can run a zsh script as root)
+- Jamf Pro, or any MDM that can run a zsh script as root
 - A logo image URL reachable from your fleet
 
 ## Deploy
 
-1. Paste the contents of `update_reminder.sh` into a Jamf script (or run from
-   any other MDM that executes zsh as root).
-2. Set the three customization points at the top of the script:
-   - `corporateLogoURL` - PNG/JPG of your org logo (~300-500px wide, transparent
-     PNG preferred). Loaded remotely, no local download needed.
-   - `support_ticket_url` - the URL users land on when they click "open a
-     support ticket" in the dialog.
-   - `cautionIcon` - which system icon overlays the dialog during DDM
-     enforcement. Default is `AlertStopIcon.icns` (red stop sign);
-     `AlertCautionIcon.icns` is a yellow triangle.
-3. Scope to a smart computer group built on patch management criteria for
-   the current macOS target. Example: "1, Tahoe = Outdated":
+1. Paste the contents of `update_reminder.sh` into a Jamf script.
+2. Set the customization points in the CONFIGURATION block at the top of the
+   script (see Configuration below). At minimum: `corporateLogoURL` and
+   `support_ticket_url`.
+3. Label script parameter 4 "Maximum major version". In the policy, set it to
+   the newest major you want users moved to (for example `26`), or leave it
+   blank to always recommend the newest supported release.
+4. Scope to a smart computer group built on patch reporting for the current
+   macOS target. Example, "1, Tahoe = Outdated":
 
    <p align="center">
      <img src="screenshots/smart-group.png" alt="Jamf smart group using patch reporting criteria" width="600">
@@ -60,65 +57,113 @@ version at the right time.
 
    Criteria: `Patch Reporting: Apple macOS Tahoe is not "Latest Version"`
    **AND** `Patch Reporting: Apple macOS Tahoe is not "Unknown Version"`.
-   This pulls in every machine Jamf knows is behind on Tahoe, while excluding
-   machines whose patch status isn't yet known (new enrollments, offline,
-   etc.). The script then does the fine-grained per-device targeting via SOFA
-   inside that group. A daily policy works well; the script exits fast when
-   the machine is already up to date, so there's no harm running frequently.
+   This pulls in every Mac Jamf knows is behind on Tahoe and leaves out Macs
+   whose patch status isn't known yet (new enrollments, offline Macs). The
+   script does the per-device targeting inside that group. A once-a-day policy
+   works well. The script exits in about a second when the Mac is current.
 
-### Testing locally
+## Configuration
 
-The script must run as root (it reads DDM state and launches the dialog in the
-console user's context):
+All settings are plain variables in the CONFIGURATION block.
 
-```
-sudo ./update_reminder.sh
-```
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `corporateLogoURL` | PSD logo URL | Logo shown in the dialog, loaded remotely |
+| `support_ticket_url` | Freshservice URL | Link behind "open a support ticket" |
+| `cautionIcon` | `AlertStopIcon.icns` | Overlay icon during DDM enforcement (`AlertCautionIcon.icns` is the yellow triangle) |
+| `demoMode` | `false` | `true` shows the dialog on any Mac, for UI testing |
+| `releaseHoldDays` | `2` | Days a new release is held before a no-enforcement nudge recommends it |
+| `softwareUpdateListSeconds` | `90` | Time limit for `softwareupdate --list` |
+| `installLogPath` | `/var/log/install.log` | Read for the user's Install Tonight choice |
+| `reminderLogPath` | `/var/log/update_reminder.log` | Log written by the presenter (meeting waits, button clicks) |
+| `reminderPidPath` | `/var/run/update_reminder.pid` | Lock that stops a second reminder while one is waiting or on screen |
+| `meetingAssertionApps` | Teams, Zoom, Webex, Slide Show, Keynote, Blink Wake Lock | Apps or assertion names that count as a meeting or presentation |
+| `meetingCheckSeconds` | `300` | Seconds between meeting checks |
+| `meetingMaxChecks` | `15` | Checks before giving up (300 x 15 = 75 minutes) |
+| `softwareUpdateURL` | Software Update pane | Opened when the user clicks **Open Software Update** |
 
-Set `demoMode="true"` at the top of the script to force the dialog to appear
-even on up-to-date hardware - useful when iterating on the UI.
+## How the decision is made
 
-## How targeting works
+1. Fetch SOFA (3 attempts) and find the newest release for this board ID,
+   capped by the version pin. Exit if the Mac already has it.
+2. Read `/var/db/softwareupdate/SoftwareUpdateDDMStatePersistence.plist` for
+   enforcement declarations that apply to this Mac and this hardware.
+3. With an enforcement, remind about the enforced version. Without one, check
+   the release hold against SOFA's `ReleaseDate`, then check that
+   `softwareupdate --list` offers that exact version. Either check failing
+   means no dialog today.
+4. If `install.log` shows the user queued this version with Install Tonight
+   and tonight's 2:00 AM window hasn't started, skip today. A DDM deadline
+   that falls before the window overrides this.
+5. Hand the dialog to a background presenter and exit, so the Jamf policy
+   finishes in seconds. The presenter waits out meetings, then shows the
+   dialog. If a meeting outlasts the wait, a no-enforcement nudge is skipped
+   for the day and a DDM reminder is shown anyway. Within 24 hours of a DDM
+   deadline the meeting check is skipped.
 
-Two tested zsh functions carry the targeting logic, both extracted into
-`sofa_functions.sh` for unit testing:
+The release hold runs `releaseHoldDays` plus one day from SOFA's
+`ReleaseDate`. SOFA dates are midnight UTC and Apple releases during the US
+day, so the extra day keeps the reminder behind Software Update's own
+deferral.
 
-- `find_target_for_device <boardID> <sofaData>` - walks SOFA's `OSVersions`
-  newest-to-oldest. For each OS, finds the highest release this hardware
-  supports. Universal releases (no `SupportedDevices` listed in SOFA) fall back
-  to the OS family's `Latest.SupportedDevices`. Device-specific releases (like
-  a Neo-only build) only match when the board ID is in their explicit list.
-- `find_enforced_update <ddmEntries> <currentVersion> <boardID> <sofaData>` -
-  filters DDM declarations by "already installed?" and "available for this
-  hardware per SOFA?", then picks the highest version. Earliest deadline is
-  the tiebreaker for declarations of the same version. This prevents a stale
-  older enforcement from beating a newly-arrived newer one in the same plist.
+## Logs
 
-A third function, `is_version_for_device`, is shared by both.
+The Jamf policy log shows every decision the main script makes. The
+presenter writes its own lines (meeting checks, button clicks, skips) to
+`/var/log/update_reminder.log` on the Mac.
 
 ## Testing
 
-Run the test suite:
+Two suites, both run from the repo folder:
 
 ```
 ./test_sofa_functions.sh
+./test_update_reminder.sh
 ```
 
-It fetches the live SOFA feed and runs 43 tests against both synthetic
-fixtures and real data. Periodically running this is the early-warning system
-for SOFA schema changes - if the tests start failing on real data, SOFA has
-drifted and the targeting logic may need adjustment.
+`test_sofa_functions.sh` unit-tests the decision functions in
+`sofa_functions.sh` against fixtures (captured `softwareupdate`, `install.log`
+and `pmset` output in `fixtures/`) and the live SOFA feed. It also checks that
+every shared function in `update_reminder.sh` is byte-identical to its copy in
+`sofa_functions.sh`, since the deployed script has to be self-contained. If the
+live-feed tests start failing, SOFA's schema has probably changed.
+
+`test_update_reminder.sh` runs a copy of the real script end to end the way
+Jamf runs it (SIGPIPE ignored, no stdin, behind a watchdog), with stubbed
+system commands. It covers the release hold, the Software Update check, the
+DDM dialog, Install Tonight,
+meeting waits, the button results, the run lock, and that the script returns
+while the presenter is still waiting.
+
+To try the script on a Mac:
+
+```
+sudo zsh ./update_reminder.sh / "$(hostname)" "$(whoami)" 26
+```
+
+The last argument is parameter 4. Set `demoMode="true"` to see the dialog on a
+Mac that is already current.
+
+## Limitations
+
+- Focus and Do Not Disturb aren't detected. Reading them needs Full Disk
+  Access on macOS 26 and later.
+- The Keynote entry in `meetingAssertionApps` hasn't been checked against a
+  real Keynote presentation.
+- Install Tonight detection depends on the `install.log` wording macOS 26 and
+  27 use. If Apple changes it, the script stops suppressing and reminds as
+  usual.
 
 ## Credits
 
 - [Dan Snelson's DDM macOS Update Reminder](https://snelson.us/2025/03/ddm-macos-update-reminder-0-0-1/)
-  was the original inspiration for this script. Several UI patterns
-  (SwiftDialog layout, DDM overlay, help message placement) were borrowed
-  from his work.
+  was the original inspiration for this script. The swiftDialog layout, DDM
+  overlay and help message placement came from his work, as did the meeting
+  check.
 - [SOFA](https://sofa.macadmins.io/) by the MacAdmins community provides the
-  authoritative feed of macOS release metadata and hardware compatibility.
-- [SwiftDialog](https://github.com/swiftDialog/swiftDialog) by Bart Reardon for
-  the dialog rendering.
+  macOS release and hardware compatibility feed.
+- [swiftDialog](https://github.com/swiftDialog/swiftDialog) by Bart Reardon
+  renders the dialog.
 
 ## License
 
