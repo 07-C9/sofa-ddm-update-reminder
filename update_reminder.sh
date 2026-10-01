@@ -507,11 +507,37 @@ meeting_in_progress() {
 
 # present_reminder
 #
-# Shows the reminder dialog to the console user and opens Software Update only
-# when they click the button. Uses the globals built by the main flow.
+# Runs detached from the Jamf policy. Waits out a meeting or presentation
+# (meetingCheckSeconds x meetingMaxChecks), then shows the reminder dialog to
+# the console user and opens Software Update only when they click the button.
+# A meeting that outlasts the wait skips today's nudge; a DDM reminder is shown
+# anyway. Never shows the dialog if the console user changed while waiting.
 present_reminder() {
-    local rc
+    local checks=0 rc waitMinutes=$(( meetingCheckSeconds * meetingMaxChecks / 60 ))
     echo "$(date '+%Y-%m-%d %H:%M:%S') Reminder for macOS $reminderVersion (DDM enforcement: $isDDM)"
+    if [[ "$skipMeetingCheck" != "true" ]]; then
+        while meeting_in_progress "$(pmset -g assertions 2>/dev/null)" "${meetingAssertionApps[@]}"; do
+            if (( checks >= meetingMaxChecks )); then
+                if [[ "$isDDM" == "true" ]]; then
+                    echo "Meeting or presentation still active after $waitMinutes minutes - showing the required-update reminder anyway."
+                    break
+                fi
+                echo "Meeting or presentation still active after $waitMinutes minutes - skipping today's reminder."
+                rm -f "$reminderPidPath"
+                echo "Presenter finished."
+                return 0
+            fi
+            (( checks++ ))
+            echo "Meeting or presentation in progress (check $checks of $meetingMaxChecks) - waiting $meetingCheckSeconds seconds."
+            sleep "$meetingCheckSeconds"
+        done
+    fi
+    if [[ "$(stat -f%Su /dev/console)" != "$currentUser" ]]; then
+        echo "$currentUser is no longer the console user - skipping the reminder."
+        rm -f "$reminderPidPath"
+        echo "Presenter finished."
+        return 0
+    fi
     launchctl asuser "$currentUserID" sudo -u "$currentUser" "${dialogArgs[@]}"
     rc=$?
     if (( rc == 0 )); then
@@ -520,6 +546,7 @@ present_reminder() {
     else
         echo "User dismissed the reminder (dialog exit $rc)."
     fi
+    rm -f "$reminderPidPath"
     echo "Presenter finished."
 }
 
@@ -831,6 +858,17 @@ if [[ "$activeOverlay" != "none" ]]; then
     dialogArgs+=(--overlayicon "$activeOverlay")
 fi
 
+# One reminder at a time: a presenter from an earlier run may still be waiting out a meeting
+if [[ -f "$reminderPidPath" ]]; then
+    priorPid=$(cat "$reminderPidPath" 2>/dev/null)
+    if [[ "$priorPid" =~ ^[0-9]+$ ]] && kill -0 "$priorPid" 2>/dev/null && [[ "$(ps -p "$priorPid" -o command= 2>/dev/null)" == *zsh* ]]; then
+        echo "A reminder from an earlier run is still waiting or on screen - not stacking another. Exiting."
+        exit 0
+    fi
+fi
+
+# The presenter runs detached so a meeting wait never holds the Jamf policy open
 echo "Handing the reminder to the presenter (log: $reminderLogPath)."
-present_reminder >> "$reminderLogPath" 2>&1 < /dev/null
+present_reminder >> "$reminderLogPath" 2>&1 < /dev/null &!
+echo "$!" > "$reminderPidPath"
 exit 0

@@ -378,6 +378,86 @@ else
     assert_contains "dialog shown" "Software Update Required: macOS 26.7" "$RUN_LAUNCH"
 fi
 
+echo ""
+echo "--- Meeting for the first 2 checks, then free: dialog after the wait ---"
+reset_defaults
+export STUB_MEETING_CALLS=2
+run_reminder
+assert_contains "logs the wait" "Meeting or presentation in progress (check 1 of 15)" "$RUN_LOG"
+assert_contains "dialog shown after" "macOS 26.7.1 Available" "$RUN_LAUNCH"
+
+echo ""
+echo "--- No order, meeting never ends: skipped today, nothing on screen ---"
+reset_defaults
+export STUB_MEETING_CALLS=99
+run_reminder
+assert_contains "logs the skip" "still active after 75 minutes - skipping today's reminder" "$RUN_LOG"
+assert_eq "launches nothing" "" "$RUN_LAUNCH"
+
+echo ""
+echo "--- DDM order 5 days out, meeting never ends: shown after 75 minutes anyway ---"
+reset_defaults
+export STUB_MEETING_CALLS=99
+ddm_order "26.7" "$(date -v+5d "+%Y-%m-%dT21:00:00")"
+run_reminder
+assert_contains "logs show-anyway" "showing the required-update reminder anyway" "$RUN_LOG"
+assert_contains "dialog shown" "Software Update Required: macOS 26.7" "$RUN_LAUNCH"
+
+echo ""
+echo "--- DDM order due within 24 hours: no meeting wait at all ---"
+reset_defaults
+export STUB_MEETING_CALLS=99
+ddm_order "26.7" "$(date -v+3H "+%Y-%m-%dT%H:%M:00")"
+run_reminder
+assert_eq "pmset never consulted" "" "$(cat "$STUB_PMSET_COUNT" 2>/dev/null)"
+assert_contains "dialog shown" "Software Update Required: macOS 26.7" "$RUN_LAUNCH"
+
+echo ""
+echo "--- Console user changes during the meeting wait: no dialog in someone else's session ---"
+reset_defaults
+export STUB_MEETING_CALLS=1 STUB_USER_CHANGES_AFTER=1
+run_reminder
+assert_contains "logs the user change" "testuser is no longer the console user" "$RUN_LOG"
+assert_eq "launches nothing" "" "$RUN_LAUNCH"
+
+echo ""
+echo "--- Main script returns while the presenter is still waiting ---"
+reset_defaults
+export STUB_MEETING_CALLS=99
+printf '#!/bin/sh\n/bin/sleep 0.5\n' > "$STUBS/sleep"
+chmod +x "$STUBS/sleep"
+run_reminder
+# The presenter needs 15 x 0.5s = 7.5s; one scenario of the main script measured ~0.7s on 2026-10-01
+assert_eq "policy finished in under 3 seconds" "fast" "$( (( RUN_SECONDS < 3 )) && echo fast || echo slow )"
+assert_contains "presenter still finished later" "Presenter finished." "$RUN_LOG"
+printf '#!/bin/sh\nexit 0\n' > "$STUBS/sleep"
+chmod +x "$STUBS/sleep"
+
+echo ""
+echo "--- A presenter from an earlier run is still alive: no second dialog ---"
+reset_defaults
+( exec -a "/bin/zsh update_reminder_presenter" /bin/sleep 30 ) &
+holder=$!
+echo "$holder" > "$REMINDER_PID"
+run_reminder
+assert_contains "logs not stacking" "still waiting or on screen - not stacking another" "$RUN_OUT"
+assert_eq "launches nothing" "" "$RUN_LAUNCH"
+kill $holder 2>/dev/null
+wait $holder 2>/dev/null
+
+echo ""
+echo "--- Stale pid file from a crashed presenter: reminder proceeds ---"
+reset_defaults
+echo 999999 > "$REMINDER_PID"
+run_reminder
+assert_contains "dialog shown" "macOS 26.7.1 Available" "$RUN_LAUNCH"
+
+echo ""
+echo "--- Presenter clears its lock when it finishes ---"
+reset_defaults
+run_reminder
+assert_eq "no pid file left behind" "absent" "$([[ -f "$REMINDER_PID" ]] && echo present || echo absent)"
+
 # ============================================================
 echo ""
 echo "=== Results ==="
