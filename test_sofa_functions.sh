@@ -546,6 +546,9 @@ assert_return "prefix of an offered version is not a match" 1 su_offers_version 
 assert_return "27.0.10 does not match an offer of 27.0.1" 1 su_offers_version "27.0.10" "$SU_OFFERING"
 assert_return "nothing offered" 1 su_offers_version "26.7.1" "$SU_EMPTY"
 assert_return "empty output" 1 su_offers_version "26.7.1" ""
+assert_return "a non-macOS product with the same version number is not a match" 1 su_offers_version "26.1" "$(printf '* Label: Safari26.1SequoiaAuto-26.1\n\tTitle: Safari, Version: 26.1, Size: 1KiB, Recommended: YES, \n')"
+assert_return "a macOS line marked Deferred: YES is not an offer" 1 su_offers_version "26.7.1" "$(printf '* Label: macOS Tahoe 26.7.1-25G241\n\tTitle: macOS Tahoe 26.7.1, Version: 26.7.1, Size: 1KiB, Recommended: YES, Action: restart, Deferred: YES\n')"
+assert_return "a macOS title with the OS name still matches" 0 su_offers_version "26.7.1" "$(printf '* Label: macOS Tahoe 26.7.1-25G241\n\tTitle: macOS Tahoe 26.7.1, Version: 26.7.1, Size: 1KiB, Recommended: YES, Action: restart, \n')"
 
 # ============================================================
 echo ""

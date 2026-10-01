@@ -413,11 +413,22 @@ release_cleared_hold() {
 # Returns 0 when `softwareupdate --list` output offers exactly this macOS
 # version. Software Update hides releases that are still deferred, so this is
 # the Mac's own answer to "would the user find this update if they looked".
-# Matches the "Version: X," field so 27.0.1 never matches 27.0 or 27.0.10.
+# Only "Title: macOS ..." lines count, so Safari or another product with the
+# same version number never matches, and a line marked "Deferred: YES" is not
+# an offer. Matches the "Version: X," field so 27.0.1 never matches 27.0 or
+# 27.0.10.
 su_offers_version() {
     local version="$1"
     local listText="$2"
-    [[ -n "$version" && "$listText" == *"Version: ${version},"* ]]
+    local line
+    [[ -z "$version" ]] && return 1
+    while IFS= read -r line; do
+        [[ "$line" == *"Title: macOS "* ]] || continue
+        [[ "$line" == *", Version: ${version},"* ]] || continue
+        [[ "$line" == *"Deferred: YES"* ]] && continue
+        return 0
+    done <<< "$listText"
+    return 1
 }
 
 # list_offered_updates <outFile> <maxSeconds>
