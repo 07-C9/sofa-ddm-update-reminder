@@ -1,0 +1,7 @@
+   pid 49170(caffeinate): [0x000d5d8000019952] 00:02:48 PreventUserIdleSystemSleep named: "caffeinate command-line tool"
+   pid 1109(sharingd): [0x000d5d7300019937] 00:03:05 PreventUserIdleSystemSleep named: "Handoff"
+   pid 34961(caffeinate): [0x000d5d500001990c] 00:03:40 PreventUserIdleSystemSleep named: "caffeinate command-line tool"
+   pid 48981(caffeinate): [0x000d5d7a00019946] 00:02:58 PreventUserIdleSystemSleep named: "caffeinate command-line tool"
+   pid 625(WindowServer): [0x000d11e00009818b] 00:00:18 UserIsActive named: "com.apple.iohideventsystem.queue.tickle"
+   pid 567(powerd): [0x000d11e10001818e] 05:25:32 PreventUserIdleSystemSleep named: "Powerd - Prevent sleep while display is on"
+   pid 62807(caffeinate): [0x000d5dbd000199c3] 00:01:51 PreventUserIdleSystemSleep named: "caffeinate command-line tool"

@@ -1,0 +1,8 @@
+2026-09-30 17:47:23-07 TESTMAC001 SoftwareUpdateSettingsExtension[44319]: InstallTonightButton.swift:body:43: Clicked to queue available updates for later
+2026-09-30 17:47:28-07 TESTMAC001 SoftwareUpdateSettingsExtension[44319]: SettingsController.swift:client(_:queuingUpdatesForLater:):1055: Updates being queued for later: [<SUOSUProduct: MSU_UPDATE_26A434_patch_27.0.1_minor>]
+2026-09-30 17:47:28-07 TESTMAC001 SoftwareUpdateSettingsExtension[44319]: SettingsController.swift:client(_:updatesQueuedForLaterChanged:with:):1066: Updates queued for later: [<SUOSUProduct: MSU_UPDATE_26A434_patch_27.0.1_minor>], mode: SUOSULaterMode(rawValue: 1)
+2026-09-30 17:47:28-07 TESTMAC001 SoftwareUpdateSettingsExtension[44319]: SettingsController.swift:client(_:queuingUpdatesForLater:):1058: Updates being queued for later: [<SUOSUProduct: MSU_UPDATE_26A434_patch_27.0.1_minor>]
+2026-09-30 17:47:28-07 TESTMAC001 SoftwareUpdateSettingsExtension[44319]: SettingsController.swift:client(_:updatesQueuedForLaterChanged:with:):1077: Updated install tonight state (enabled = true, restart = true)
+2026-09-30 18:02:11-07 TESTMAC001 SoftwareUpdateSettingsExtension[63845]: SUOSUShimController: Armed: 0, with mode: 0, date: (null), updates queued for later: (
+2026-09-30 18:02:11-07 TESTMAC001 SoftwareUpdateSettingsExtension[63845]: SettingsController.swift:client(_:updatesQueuedForLaterChanged:with:):1066: Updates queued for later: [], mode: SUOSULaterMode(rawValue: 0)
+2026-09-30 18:02:11-07 TESTMAC001 SoftwareUpdateSettingsExtension[63845]: SettingsController.swift:client(_:updatesQueuedForLaterChanged:with:):1077: Updated install tonight state (enabled = false, restart = false)

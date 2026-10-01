@@ -549,6 +549,41 @@ assert_return "empty output" 1 su_offers_version "26.7.1" ""
 
 # ============================================================
 echo ""
+echo "=== Test Suite: Install Tonight detection ==="
+TONIGHT_QUEUED=$(cat "$SCRIPT_DIR/fixtures/install_log_tonight_queued.txt")
+TONIGHT_CANCELED=$(cat "$SCRIPT_DIR/fixtures/install_log_tonight_canceled.txt")
+queuedAt=$(date -jf "%Y-%m-%d %H:%M:%S" "2026-09-30 17:47:28" "+%s")
+windowStart=$(date -jf "%Y-%m-%d %H:%M:%S" "2026-10-01 02:00:00" "+%s")
+assert_return "queued for tonight, evening: pending" 0 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( queuedAt + 60 ))
+assert_return "one second before the 2 AM window: pending" 0 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( windowStart - 1 ))
+assert_return "window started and Mac still behind: not pending" 1 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" "$windowStart"
+assert_return "next afternoon (stale queue): not pending" 1 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( windowStart + 12*3600 ))
+assert_return "different version queued: not pending" 1 install_tonight_pending "26.7.1" "$TONIGHT_QUEUED" $(( queuedAt + 60 ))
+assert_return "27.0.10 does not match a queue of 27.0.1" 1 install_tonight_pending "27.0.10" "$TONIGHT_QUEUED" $(( queuedAt + 60 ))
+assert_return "user canceled: not pending" 1 install_tonight_pending "27.0.1" "$TONIGHT_CANCELED" $(( queuedAt + 3600 ))
+assert_return "no install log lines: not pending" 1 install_tonight_pending "27.0.1" "" $(( queuedAt + 60 ))
+assert_return "deadline before the window: not pending" 1 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( queuedAt + 60 )) $(( windowStart - 600 ))
+assert_return "deadline after the window: pending" 0 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( queuedAt + 60 )) $(( windowStart + 86400 ))
+
+# ============================================================
+echo ""
+echo "=== Test Suite: meeting detection ==="
+MEETING_APPS=( "MSTeams" "zoom.us" "Webex" "Slide Show" "Keynote" "Blink Wake Lock" )
+PMSET_IDLE=$(cat "$SCRIPT_DIR/fixtures/pmset_assertions_idle.txt")
+assert_return "idle Mac: no meeting" 1 meeting_in_progress "$PMSET_IDLE" "${MEETING_APPS[@]}"
+assert_return "empty assertions: no meeting" 1 meeting_in_progress "" "${MEETING_APPS[@]}"
+for n in 1 2 3 4 5; do
+    oneLine=$(sed -n "${n}p" "$SCRIPT_DIR/fixtures/pmset_assertions_meetings.txt")
+    assert_return "meeting line $n counts" 0 meeting_in_progress "$oneLine" "${MEETING_APPS[@]}"
+done
+for n in 6 7 8; do
+    oneLine=$(sed -n "${n}p" "$SCRIPT_DIR/fixtures/pmset_assertions_meetings.txt")
+    assert_return "non-meeting line $n does not count" 1 meeting_in_progress "$oneLine" "${MEETING_APPS[@]}"
+done
+assert_return "system-sleep assertion from a listed app does not count" 1 meeting_in_progress '   pid 9(zoom.us): [0x1] 00:00:01 PreventUserIdleSystemSleep named: "zoom.us"' "${MEETING_APPS[@]}"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"

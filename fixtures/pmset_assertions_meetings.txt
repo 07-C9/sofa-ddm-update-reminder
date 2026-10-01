@@ -1,0 +1,8 @@
+   pid 24542(Webex): [0x0000a1b2000c0001] 00:12:01 PreventUserIdleDisplaySleep named: "On a call"
+   pid 23100(MSTeams): [0x0000a1b2000c0002] 00:05:00 PreventUserIdleDisplaySleep named: "Call in progress"
+   pid 31337(zoom.us): [0x0000a1b2000c0003] 00:03:00 PreventUserIdleDisplaySleep named: "zoom.us"
+   pid 4242(Microsoft PowerPoint): [0x0000a1b2000c0004] 00:20:00 NoDisplaySleepAssertion named: "Slide Show"
+   pid 777(Google Chrome Helper (Renderer)): [0x0000a1b2000c0005] 00:30:00 NoDisplaySleepAssertion named: "Blink Wake Lock"
+   pid 778(Google Chrome Helper (Renderer)): [0x0000a1b2000c0006] 00:30:00 NoDisplaySleepAssertion named: "Video Wake Lock"
+   pid 300(coreaudiod): [0x0000a1b2000c0007] 00:30:00 PreventUserIdleDisplaySleep named: "Webex audio"
+   pid 58375(caffeinate): [0x0000a1b2000c0008] 00:01:00 PreventUserIdleDisplaySleep named: "caffeinate command-line tool"
