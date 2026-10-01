@@ -25,7 +25,7 @@ sofa_is_usable() {
 # to find the newest release that supports this hardware.
 #
 # This means a macOS 15 machine whose hardware supports Tahoe will be targeted
-# for the latest Tahoe release it's eligible for — not stuck on macOS 15.
+# for the latest Tahoe release it's eligible for - not stuck on macOS 15.
 #
 # maxMajor (optional): pin the recommendation to a major version. OS families
 # whose major is higher than maxMajor are skipped, so a fleet held on macOS 26
@@ -67,12 +67,12 @@ find_target_for_device() {
         fi
 
         # Cache Latest.SupportedDevices once per OS. Universal SecurityReleases
-        # omit SupportedDevices in SOFA's current schema — they apply to whatever
+        # omit SupportedDevices in SOFA's current schema - they apply to whatever
         # hardware Latest lists for this OS family.
         latestDevices=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.Latest.SupportedDevices" json -o - - 2>/dev/null)
 
         # Walk all SecurityReleases and track the highest version this device supports.
-        # Does not assume feed ordering — always returns the newest eligible release.
+        # Does not assume feed ordering - always returns the newest eligible release.
         # (e.g., 26.3.2 for Neo only while general fleet stays on 26.3.1)
         relCount=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.SecurityReleases" raw -o - - 2>/dev/null)
         if [[ -n "$relCount" && "$relCount" -gt 0 ]]; then
@@ -98,7 +98,7 @@ find_target_for_device() {
                 return 0
             fi
         else
-            # No SecurityReleases — fall back to Latest
+            # No SecurityReleases - fall back to Latest
             if [[ -n "$latestDevices" ]] && echo "$latestDevices" | grep -q "\"$boardID\""; then
                 echo "$osLatest $osIdx"
                 return 0
@@ -161,7 +161,7 @@ find_enforced_update() {
         tEpoch=$(date -jf "%Y-%m-%dT%H:%M:%S" "$tDate" "+%s" 2>/dev/null)
         [[ -z "$tEpoch" ]] && continue
 
-        # Prefer higher version — installing the newer release satisfies every
+        # Prefer higher version - installing the newer release satisfies every
         # older enforcement and avoids picking a stale leftover declaration.
         # Earliest deadline is only the tiebreaker for declarations of the same version.
         if [[ -z "$bestVer" ]] || ! is-at-least "$tVer" "$bestVer"; then

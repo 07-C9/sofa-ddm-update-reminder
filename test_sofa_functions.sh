@@ -377,7 +377,7 @@ echo ""
 echo "--- Stale + new: higher version wins over earlier deadline ---"
 # Brad's 26.4/26.4.1 bug: an old 26.4 enforcement (deadline passed) lingered in the plist
 # after 26.4.1 released with its own enforcement. Earliest-deadline rule picked stale 26.4.
-# Correct rule: higher version wins — installing 26.4.1 satisfies both.
+# Correct rule: higher version wins - installing 26.4.1 satisfies both.
 DDM_SOFA_41='{"OSVersions":[{"Latest":{"ProductVersion":"26.4.1","Build":"25E42","SupportedDevices":["J314sAP","J316sAP","J700AP"]},"SecurityReleases":[{"ProductVersion":"26.4.1"},{"ProductVersion":"26.4"},{"ProductVersion":"26.3.2","SupportedDevices":["J700AP"]}]}]}'
 DDM_ENTRIES="26.4|2026-04-03T23:30:00
 26.4.1|2026-04-22T23:30:00"
