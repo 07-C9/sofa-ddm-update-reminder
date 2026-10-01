@@ -31,9 +31,9 @@ Software Update.
   **Open Software Update**. **Later** closes the dialog, and an unanswered
   dialog closes itself after 4 hours so the next day's reminder can run.
   Choosing Install Tonight in Software Update doesn't stop the reminder.
-  Install Tonight isn't reliable on Macs with a Software Update deferral (a
-  queued 27.0.1 never installed on a test Mac), so the reminder keeps going
-  until the Mac is updated.
+  Install Tonight isn't reliable (on a test Mac, 27.0.1 was armed for the
+  overnight window and never installed), so the reminder keeps going until
+  the Mac is updated.
 
 ## Requirements
 

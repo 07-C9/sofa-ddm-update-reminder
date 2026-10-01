@@ -15,9 +15,8 @@
   current major, so a Mac already on a newer major still gets that major's
   updates.
 - Choosing Install Tonight doesn't stop the reminder. Install Tonight isn't
-  reliable on Macs with a Software Update deferral (a queued 27.0.1 never
-  installed on a test Mac), so the reminder keeps going until the Mac is
-  updated.
+  reliable (on a test Mac, 27.0.1 was armed for the overnight window and never
+  installed), so the reminder keeps going until the Mac is updated.
 
 ### Added
 - Meeting check. While Teams, Zoom, Webex, a PowerPoint slide show, Keynote or
