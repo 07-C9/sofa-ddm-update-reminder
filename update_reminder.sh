@@ -376,6 +376,42 @@ release_cleared_hold() {
     return 1
 }
 
+# su_offers_version <version> <softwareupdateListText>
+#
+# Returns 0 when `softwareupdate --list` output offers exactly this macOS
+# version. Software Update hides releases that are still deferred, so this is
+# the Mac's own answer to "would the user find this update if they looked".
+# Matches the "Version: X," field so 27.0.1 never matches 27.0 or 27.0.10.
+su_offers_version() {
+    local version="$1"
+    local listText="$2"
+    [[ -n "$version" && "$listText" == *"Version: ${version},"* ]]
+}
+
+# list_offered_updates <outFile> <maxSeconds>
+#
+# Runs `softwareupdate --list` into outFile with a time limit, so an unreachable
+# catalog can never hold the Jamf policy open. Returns 0 when the command
+# finished, 1 when it had to be stopped at the limit.
+list_offered_updates() {
+    local outFile="$1"
+    local maxSeconds="$2"
+    local pid ticks=0
+    softwareupdate --list > "$outFile" 2>&1 < /dev/null &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( ticks >= maxSeconds * 10 )); then
+            kill "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            return 1
+        fi
+        /bin/sleep 0.1
+        (( ticks++ ))
+    done
+    wait "$pid" 2>/dev/null
+    return 0
+}
+
 # --- Internal constants ---
 scriptVersion="6.11-Universal"
 sofaURL="https://sofafeed.macadmins.io/v2/macos_data_feed.json"

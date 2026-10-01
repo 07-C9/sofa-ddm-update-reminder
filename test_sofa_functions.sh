@@ -538,6 +538,17 @@ assert_return "real SOFA feed: newest release has a parseable ReleaseDate" 0 rel
 
 # ============================================================
 echo ""
+echo "=== Test Suite: Software Update offer gate ==="
+SU_OFFERING=$(cat "$SCRIPT_DIR/fixtures/softwareupdate_list_offering.txt")
+SU_EMPTY=$(cat "$SCRIPT_DIR/fixtures/softwareupdate_list_empty.txt")
+assert_return "offered version is found" 0 su_offers_version "27.0.1" "$SU_OFFERING"
+assert_return "prefix of an offered version is not a match" 1 su_offers_version "27.0" "$SU_OFFERING"
+assert_return "27.0.10 does not match an offer of 27.0.1" 1 su_offers_version "27.0.10" "$SU_OFFERING"
+assert_return "nothing offered" 1 su_offers_version "26.7.1" "$SU_EMPTY"
+assert_return "empty output" 1 su_offers_version "26.7.1" ""
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"

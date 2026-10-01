@@ -1,0 +1,6 @@
+Software Update Tool
+
+Finding available software
+Software Update found the following new or updated software:
+* Label: macOS 27.0.1-26A434
+	Title: macOS 27.0.1, Version: 27.0.1, Size: 3235867KiB, Recommended: YES, Action: restart, 
