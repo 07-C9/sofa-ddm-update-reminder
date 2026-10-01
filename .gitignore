@@ -2,3 +2,19 @@
 .claude/
 *.swp
 *.swo
+
+# Local working notes and continuity file - stays on disk, never tracked
+project_journal.md
+
+# Daily logs and hand-off docs - local only
+*daily-log*
+*daily_log*
+*Daily-Log*
+*Daily_Log*
+*handoff*
+*hand-off*
+*hand_off*
+*Handoff*
+*HANDOFF*
+*Hand-Off*
+*Hand_Off*

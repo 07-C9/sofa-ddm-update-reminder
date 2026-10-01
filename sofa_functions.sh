@@ -2,7 +2,23 @@
 # ABOUTME: Shared functions for SOFA feed parsing and hardware-aware update targeting.
 # ABOUTME: Sourced by the main update notification script and by tests.
 
-# find_target_for_device <boardID> <sofaJSON>
+# sofa_is_usable <sofaJSON>
+#
+# Returns 0 if the payload parses as a SOFA feed with at least one OS version,
+# 1 otherwise. Guards against empty, truncated, or non-JSON downloads that are
+# non-empty but unparseable (a curl body cut short by a timeout, or a
+# captive-portal HTML page). find_target_for_device treats an unparseable feed
+# as "no supported version", so the fetch loop must reject junk and retry
+# rather than accept the first non-empty response.
+sofa_is_usable() {
+    local data="$1"
+    [[ -z "$data" ]] && return 1
+    local n
+    n=$(echo "$data" | plutil -extract "OSVersions" raw -o - - 2>/dev/null)
+    [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 ))
+}
+
+# find_target_for_device <boardID> <sofaJSON> [maxMajor]
 #
 # Walks OSVersions from newest to oldest. For each OS, checks if the board ID
 # appears in the Latest release's SupportedDevices. If not, walks SecurityReleases
@@ -11,17 +27,23 @@
 # This means a macOS 15 machine whose hardware supports Tahoe will be targeted
 # for the latest Tahoe release it's eligible for — not stuck on macOS 15.
 #
+# maxMajor (optional): pin the recommendation to a major version. OS families
+# whose major is higher than maxMajor are skipped, so a fleet held on macOS 26
+# via a Blueprint still gets the newest 26.x rather than being pushed to 27.
+# Empty maxMajor means no cap (recommend the newest supported version).
+#
 # Outputs a single line: <productVersion> <osIndex>
 # Returns 0 if a supported version was found, 1 if not.
 find_target_for_device() {
     local boardID="$1"
     local sofaData="$2"
+    local maxMajor="$3"
 
     autoload -Uz is-at-least
 
     # Declare all loop variables up front to avoid zsh's typeset re-declaration
     # printing previous values to stdout on subsequent iterations
-    local osCount osIdx osLatest latestDevices relCount ridx relVer relDevices
+    local osCount osIdx osLatest osMajor latestDevices relCount ridx relVer relDevices
     local bestVer bestOsIdx
 
     osCount=$(echo "$sofaData" | plutil -extract "OSVersions" raw -o - - 2>/dev/null)
@@ -32,7 +54,13 @@ find_target_for_device() {
     for (( osIdx=0; osIdx<osCount; osIdx++ )); do
         osLatest=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.Latest.ProductVersion" raw -o - - 2>/dev/null)
 
-        # If no board ID was detected, fall back to absolute latest
+        # Skip OS families above the version pin, if one is set
+        osMajor="${osLatest%%.*}"
+        if [[ -n "$maxMajor" && -n "$osMajor" && "$osMajor" -gt "$maxMajor" ]]; then
+            continue
+        fi
+
+        # If no board ID was detected, fall back to absolute latest (within the pin)
         if [[ -z "$boardID" ]]; then
             echo "$osLatest $osIdx"
             return 0
@@ -82,11 +110,15 @@ find_target_for_device() {
     return 1
 }
 
-# find_enforced_update <ddmEntries> <currentVersion> <boardID> <sofaData>
+# find_enforced_update <ddmEntries> <currentVersion> <boardID> <sofaData> [maxMajor]
 #
 # Filters DDM enforcement entries to find the most urgent applicable one.
 # Skips versions the machine already has and versions not available for
 # this hardware per SOFA SupportedDevices. Returns the earliest deadline.
+#
+# maxMajor (optional): same version pin as find_target_for_device. Enforcement
+# declarations for a major above the pin are skipped, so the reminder stays
+# consistent with a fleet pinned to an older major.
 #
 # ddmEntries: newline-separated "version|date" lines (from plist parsing)
 # Outputs: "version|deadline" for the most urgent enforcement
@@ -96,10 +128,11 @@ find_enforced_update() {
     local currentVersion="$2"
     local boardID="$3"
     local sofaData="$4"
+    local maxMajor="$5"
 
     autoload -Uz is-at-least
 
-    local tVer tDate tEpoch
+    local tVer tDate tEpoch tMajor
     local bestEpoch=""
     local bestVer=""
     local bestDate=""
@@ -108,6 +141,12 @@ find_enforced_update() {
 
     while IFS='|' read -r tVer tDate; do
         [[ -z "$tVer" || -z "$tDate" ]] && continue
+
+        # Skip enforcement above the version pin, if one is set
+        tMajor="${tVer%%.*}"
+        if [[ -n "$maxMajor" && -n "$tMajor" && "$tMajor" -gt "$maxMajor" ]]; then
+            continue
+        fi
 
         # Skip versions this machine already has
         if is-at-least "$tVer" "$currentVersion"; then

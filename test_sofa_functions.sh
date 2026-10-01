@@ -400,6 +400,96 @@ assert_eq "same version tiebreaker is earliest" "2026-04-01T09:00:00" "$result_d
 
 # ============================================================
 echo ""
+echo "=== Test Suite: version pin (max major) ==="
+# ============================================================
+# Two OS families mirroring the current SOFA schema: 27 newest, 26 below it.
+# Universal SecurityReleases omit SupportedDevices; Latest carries the device list.
+PIN_SOFA='{"OSVersions":[{"OSVersion":"27","Latest":{"ProductVersion":"27.0","Build":"27A000","SupportedDevices":["J314sAP","J316sAP"]},"SecurityReleases":[{"ProductVersion":"27.0"}]},{"OSVersion":"26","Latest":{"ProductVersion":"26.7","Build":"25G000","SupportedDevices":["J314sAP","J316sAP"]},"SecurityReleases":[{"ProductVersion":"26.7"},{"ProductVersion":"26.6"}]}]}'
+
+echo ""
+echo "--- No pin: newest major wins (current behavior preserved) ---"
+result=$(find_target_for_device "J314sAP" "$PIN_SOFA")
+assert_eq "no pin targets newest major 27.0" "27.0" "$(echo "$result" | awk '{print $1}')"
+
+echo ""
+echo "--- Pin to 26: skip macOS 27, target latest 26 ---"
+result=$(find_target_for_device "J314sAP" "$PIN_SOFA" "26")
+assert_eq "pin 26 targets latest 26 (26.7)" "26.7" "$(echo "$result" | awk '{print $1}')"
+assert_eq "pin 26 reports OS index 1" "1" "$(echo "$result" | awk '{print $2}')"
+
+echo ""
+echo "--- Pin at newest major: no effect ---"
+result=$(find_target_for_device "J314sAP" "$PIN_SOFA" "27")
+assert_eq "pin 27 still targets 27.0" "27.0" "$(echo "$result" | awk '{print $1}')"
+
+echo ""
+echo "--- Empty pin string: no cap ---"
+result=$(find_target_for_device "J314sAP" "$PIN_SOFA" "")
+assert_eq "empty pin targets newest 27.0" "27.0" "$(echo "$result" | awk '{print $1}')"
+
+echo ""
+echo "--- Empty board ID with pin still respects the pin ---"
+result=$(find_target_for_device "" "$PIN_SOFA" "26")
+assert_eq "empty board with pin 26 targets 26.7" "26.7" "$(echo "$result" | awk '{print $1}')"
+
+echo ""
+echo "--- DDM enforcement honors the pin ---"
+DDM_PIN_ENTRIES="27.0|2026-09-25T23:30:00
+26.7|2026-09-30T23:30:00"
+result=$(find_enforced_update "$DDM_PIN_ENTRIES" "26.5" "J314sAP" "$PIN_SOFA" "26")
+assert_eq "DDM pin 26 skips 27.0, returns 26.7" "26.7" "$(echo "$result" | cut -d'|' -f1)"
+
+echo ""
+echo "--- DDM without pin picks highest available ---"
+result=$(find_enforced_update "$DDM_PIN_ENTRIES" "26.5" "J314sAP" "$PIN_SOFA")
+assert_eq "DDM no pin picks highest 27.0" "27.0" "$(echo "$result" | cut -d'|' -f1)"
+
+echo ""
+echo "--- DDM pinned below a lone higher-major enforcement: nothing applies ---"
+result=$(find_enforced_update "27.0|2026-09-25T23:30:00" "26.5" "J314sAP" "$PIN_SOFA" "26")
+rc=$?
+assert_eq "DDM pin 26 with only 27.0 enforcement returns failure" "1" "$rc"
+
+# ============================================================
+echo ""
+echo "=== Test Suite: sofa_is_usable (reject truncated/garbage feeds) ==="
+# ============================================================
+# A curl body cut short by a timeout is non-empty but unparseable; accepting it
+# makes find_target_for_device fail with "No supported OS version found".
+
+echo ""
+echo "--- Valid live feed is usable ---"
+sofa_is_usable "$SOFA_DATA"; rc=$?
+assert_eq "live feed is usable" "0" "$rc"
+
+echo ""
+echo "--- Empty feed is not usable ---"
+sofa_is_usable ""; rc=$?
+assert_eq "empty feed not usable" "1" "$rc"
+
+echo ""
+echo "--- Truncated feed (non-empty, invalid JSON) is not usable ---"
+TRUNC="${SOFA_DATA:0:3000}"
+sofa_is_usable "$TRUNC"; rc=$?
+assert_eq "truncated feed not usable" "1" "$rc"
+
+echo ""
+echo "--- Captive-portal HTML is not usable ---"
+sofa_is_usable "<html><body>Sign in to Wi-Fi</body></html>"; rc=$?
+assert_eq "html garbage not usable" "1" "$rc"
+
+echo ""
+echo "--- Minimal valid feed with OSVersions is usable ---"
+sofa_is_usable '{"OSVersions":[{"OSVersion":"26","Latest":{"ProductVersion":"26.7"}}]}'; rc=$?
+assert_eq "minimal valid feed usable" "0" "$rc"
+
+echo ""
+echo "--- Valid JSON without OSVersions is not usable ---"
+sofa_is_usable '{"Foo":[]}'; rc=$?
+assert_eq "json without OSVersions not usable" "1" "$rc"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"

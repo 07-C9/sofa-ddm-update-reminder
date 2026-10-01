@@ -3,7 +3,7 @@
 # ABOUTME: Self-contained script for Jamf deployment — no external dependencies.
 
 ####################################################################################################
-# HYBRID UPDATE REMINDER - UNIVERSAL EDITION v6.8
+# HYBRID UPDATE REMINDER - UNIVERSAL EDITION v6.11
 #
 # A "Set it and forget it" script that handles both standard updates and DDM enforcement.
 #
@@ -14,6 +14,8 @@
 # 3. Native Branding: Uses Markdown to render remote logos perfectly without local resizing.
 # 4. SOFA Feed Integration: Checks against MacAdmins.io SOFA feed for truth.
 # 5. Hardware-Aware Targeting: Matches updates to device board ID via SOFA SupportedDevices.
+# 6. Enforcement-Only Reminders: Shows a dialog only when a DDM enforcement is ordering
+#    an update, and only for the enforced version. No enforcement = silent exit.
 ####################################################################################################
 
 # --- SAFETY CHECK: Force Zsh Execution ---
@@ -46,13 +48,41 @@ cautionIcon="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/Al
 # Use this to test UI appearance. Set back to "false" before deploying.
 demoMode="false"
 
+# Maximum major macOS version to recommend (Jamf script parameter 4).
+# Set to e.g. "26" to hold the fleet on macOS 26 while a newer major (27) is
+# hidden via a Blueprint or deferral: the script then recommends the newest
+# 26.x this hardware supports and never suggests 27. Applies to both the
+# standard reminder and DDM enforcement. Leave blank ($4 unset) to always
+# recommend the newest supported version.
+maxMajorPin="$4"
+if [[ -n "$maxMajorPin" && ! "$maxMajorPin" =~ ^[0-9]+$ ]]; then
+    echo "WARNING: Ignoring non-numeric version pin '$maxMajorPin' (parameter 4)."
+    maxMajorPin=""
+fi
+
 ####################################################################################################
 # END CONFIGURATION
 ####################################################################################################
 
 # --- SOFA FUNCTIONS ---
 
-# find_target_for_device <boardID> <sofaJSON>
+# sofa_is_usable <sofaJSON>
+#
+# Returns 0 if the payload parses as a SOFA feed with at least one OS version,
+# 1 otherwise. Guards against empty, truncated, or non-JSON downloads that are
+# non-empty but unparseable (a curl body cut short by a timeout, or a
+# captive-portal HTML page). find_target_for_device treats an unparseable feed
+# as "no supported version", so the fetch loop must reject junk and retry
+# rather than accept the first non-empty response.
+sofa_is_usable() {
+    local data="$1"
+    [[ -z "$data" ]] && return 1
+    local n
+    n=$(echo "$data" | plutil -extract "OSVersions" raw -o - - 2>/dev/null)
+    [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 ))
+}
+
+# find_target_for_device <boardID> <sofaJSON> [maxMajor]
 #
 # Walks OSVersions from newest to oldest. For each OS, scans all SecurityReleases and
 # returns the highest version this device supports. Does not assume feed ordering.
@@ -61,17 +91,23 @@ demoMode="false"
 # This means a macOS 15 machine whose hardware supports Tahoe will be targeted
 # for the latest Tahoe release it's eligible for — not stuck on macOS 15.
 #
+# maxMajor (optional): pin the recommendation to a major version. OS families
+# whose major is higher than maxMajor are skipped, so a fleet held on macOS 26
+# via a Blueprint still gets the newest 26.x rather than being pushed to 27.
+# Empty maxMajor means no cap (recommend the newest supported version).
+#
 # Outputs a single line: <productVersion> <osIndex>
 # Returns 0 if a supported version was found, 1 if not.
 find_target_for_device() {
     local boardID="$1"
     local sofaData="$2"
+    local maxMajor="$3"
 
     autoload -Uz is-at-least
 
     # Declare all loop variables up front to avoid zsh's typeset re-declaration
     # printing previous values to stdout on subsequent iterations
-    local osCount osIdx osLatest latestDevices relCount ridx relVer relDevices
+    local osCount osIdx osLatest osMajor latestDevices relCount ridx relVer relDevices
     local bestVer bestOsIdx
 
     osCount=$(echo "$sofaData" | plutil -extract "OSVersions" raw -o - - 2>/dev/null)
@@ -82,7 +118,13 @@ find_target_for_device() {
     for (( osIdx=0; osIdx<osCount; osIdx++ )); do
         osLatest=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.Latest.ProductVersion" raw -o - - 2>/dev/null)
 
-        # If no board ID was detected, fall back to absolute latest
+        # Skip OS families above the version pin, if one is set
+        osMajor="${osLatest%%.*}"
+        if [[ -n "$maxMajor" && -n "$osMajor" && "$osMajor" -gt "$maxMajor" ]]; then
+            continue
+        fi
+
+        # If no board ID was detected, fall back to absolute latest (within the pin)
         if [[ -z "$boardID" ]]; then
             echo "$osLatest $osIdx"
             return 0
@@ -185,11 +227,15 @@ is_version_for_device() {
     return 1
 }
 
-# find_enforced_update <ddmEntries> <currentVersion> <boardID> <sofaData>
+# find_enforced_update <ddmEntries> <currentVersion> <boardID> <sofaData> [maxMajor]
 #
 # Filters DDM enforcement entries to find the most urgent applicable one.
 # Skips versions the machine already has and versions not available for
 # this hardware per SOFA SupportedDevices. Returns the earliest deadline.
+#
+# maxMajor (optional): same version pin as find_target_for_device. Enforcement
+# declarations for a major above the pin are skipped, so the reminder stays
+# consistent with a fleet pinned to an older major.
 #
 # ddmEntries: newline-separated "version|date" lines (from plist parsing)
 # Outputs: "version|deadline" for the most urgent enforcement
@@ -199,10 +245,11 @@ find_enforced_update() {
     local currentVersion="$2"
     local boardID="$3"
     local sofaData="$4"
+    local maxMajor="$5"
 
     autoload -Uz is-at-least
 
-    local tVer tDate tEpoch
+    local tVer tDate tEpoch tMajor
     local bestEpoch=""
     local bestVer=""
     local bestDate=""
@@ -211,6 +258,12 @@ find_enforced_update() {
 
     while IFS='|' read -r tVer tDate; do
         [[ -z "$tVer" || -z "$tDate" ]] && continue
+
+        # Skip enforcement above the version pin, if one is set
+        tMajor="${tVer%%.*}"
+        if [[ -n "$maxMajor" && -n "$tMajor" && "$tMajor" -gt "$maxMajor" ]]; then
+            continue
+        fi
 
         # Skip versions this machine already has
         if is-at-least "$tVer" "$currentVersion"; then
@@ -247,7 +300,7 @@ find_enforced_update() {
 }
 
 # --- Internal constants ---
-scriptVersion="6.8-Universal"
+scriptVersion="6.11-Universal"
 sofaURL="https://sofafeed.macadmins.io/v2/macos_data_feed.json"
 osIconPath="/var/tmp/os_icon.png"
 NL=$'\n'
@@ -279,30 +332,38 @@ if [[ -z "$boardID" ]]; then
     boardID=$(ioreg -d2 -c IOPlatformExpertDevice | awk -F'"' '/board-id/{print $4}')
 fi
 echo "Device: $boardID | Current: $currentVersion ($currentBuild)"
+echo "Version pin: ${maxMajorPin:-none (recommend newest supported)}"
 
 if [[ "$demoMode" == "true" ]]; then
     echo "DEMO MODE: Skipping SOFA check, forcing dialog display."
     latestVersion="26.3.1"
     targetMajor="26"
 else
-    # Fetch SOFA with bounded retry. ~19s worst case (3 x 5s timeout + 2 x 2s sleep).
+    # Fetch SOFA with bounded retry. Accept a response only if it parses as a
+    # complete feed - a slow link can return a non-empty but truncated body that
+    # is unparseable, which would otherwise be mistaken for "no supported version".
+    # connect-timeout fails fast when there is no route; the longer max-time gives
+    # the ~315KB body time to finish. ~55s worst case (3 x 15s + 2 x 2s sleep).
     sofaData=""
     for attempt in 1 2 3; do
-        sofaData=$(curl -L -m 5 -s "$sofaURL")
-        [[ -n "$sofaData" ]] && break
-        echo "SOFA fetch attempt $attempt failed."
+        sofaData=$(curl -L --connect-timeout 5 -m 15 -s "$sofaURL")
+        if sofa_is_usable "$sofaData"; then
+            break
+        fi
+        echo "SOFA fetch attempt $attempt failed or returned an incomplete feed."
+        sofaData=""
         [[ $attempt -lt 3 ]] && sleep 2
     done
 
     if [[ -z "$sofaData" ]]; then
-        echo "WARNING: Could not fetch SOFA feed after 3 attempts. Cannot verify update availability. Exiting."
+        echo "WARNING: Could not fetch a complete SOFA feed after 3 attempts. Cannot verify update availability. Exiting."
         exit 0
     fi
 
     # Find the newest release this hardware supports across ALL OS versions.
     # Walks from newest OS (e.g., Tahoe) to oldest. A macOS 15 machine whose
     # hardware supports Tahoe will be targeted for Tahoe, not stuck on 15.
-    targetResult=$(find_target_for_device "$boardID" "$sofaData")
+    targetResult=$(find_target_for_device "$boardID" "$sofaData" "$maxMajorPin")
     if [[ $? -ne 0 || -z "$targetResult" ]]; then
         echo "ERROR: No supported OS version found for $boardID in SOFA feed. Exiting."
         exit 0
@@ -340,30 +401,8 @@ else
     fi
 fi
 
-# --- STEP 2: DOWNLOAD ASSETS ---
-echo "=== Phase 2: Downloading Assets ==="
-
-# Download macOS Icon based on Target Version
-# We still download this one because --icon prefers local paths or system paths
-case ${targetMajor} in
-    14) macOSIconURL="https://ics.services.jamfcloud.com/icon/hash_eecee9688d1bc0426083d427d80c9ad48fa118b71d8d4962061d4de8d45747e7" ;;
-    15) macOSIconURL="https://ics.services.jamfcloud.com/icon/hash_0968afcd54ff99edd98ec6d9a418a5ab0c851576b687756dc3004ec52bac704e" ;;
-    26) macOSIconURL="https://ics.services.jamfcloud.com/icon/hash_7320c100c9ca155dc388e143dbc05620907e2d17d6bf74a8fb6d6278ece2c2b4" ;;
-    *) macOSIconURL="https://ics.services.jamfcloud.com/icon/hash_4555d9dc8fecb4e2678faffa8bdcf43cba110e81950e07a4ce3695ec2d5579ee" ;;
-esac
-
-echo "Downloading icon for macOS $targetMajor..."
-if curl -o "$osIconPath" "$macOSIconURL" --silent --fail; then
-    mainIcon="$osIconPath"
-    # Ensure user can read the icon
-    chmod 644 "$osIconPath"
-else
-    echo "Failed to download icon. Using Finder icon."
-    mainIcon="/System/Library/CoreServices/Finder.app"
-fi
-
-# --- STEP 3: CHECK FOR DDM ENFORCEMENT ---
-echo "=== Phase 3: Analyzing DDM State ==="
+# --- STEP 2: CHECK FOR DDM ENFORCEMENT ---
+echo "=== Phase 2: Analyzing DDM State ==="
 
 autoload -Uz is-at-least
 isDDM="false"
@@ -395,7 +434,7 @@ if [[ -f "$ddmPlistPath" ]]; then
         ')
 
         # Filter entries by compliance and hardware compatibility, pick earliest deadline
-        enforcedResult=$(find_enforced_update "$ddmEntries" "$currentVersion" "$boardID" "$sofaData")
+        enforcedResult=$(find_enforced_update "$ddmEntries" "$currentVersion" "$boardID" "$sofaData" "$maxMajorPin")
         if [[ $? -eq 0 && -n "$enforcedResult" ]]; then
             ddmVersion=$(echo "$enforcedResult" | cut -d'|' -f1)
             ddmDeadline=$(echo "$enforcedResult" | cut -d'|' -f2)
@@ -407,8 +446,41 @@ else
     echo "No DDM state file found."
 fi
 
+# The reminder only ever points users at the version a DDM enforcement is
+# ordering. With no active enforcement, stay quiet rather than nag toward
+# SOFA's latest, which on release day is a minor nobody has tested yet.
 if [[ "$isDDM" == "false" ]]; then
-    echo "No active DDM enforcement found."
+    if [[ "$demoMode" == "true" ]]; then
+        echo "DEMO MODE: No active DDM enforcement, showing the standard dialog anyway."
+    else
+        echo "No active DDM enforcement - nothing to remind. Exiting."
+        exit 0
+    fi
+else
+    # Icon matches the enforced version, not SOFA's newest
+    targetMajor="${ddmVersion%%.*}"
+fi
+
+# --- STEP 3: DOWNLOAD ASSETS ---
+echo "=== Phase 3: Downloading Assets ==="
+
+# Download macOS Icon based on Target Version
+# We still download this one because --icon prefers local paths or system paths
+case ${targetMajor} in
+    14) macOSIconURL="https://ics.services.jamfcloud.com/icon/hash_eecee9688d1bc0426083d427d80c9ad48fa118b71d8d4962061d4de8d45747e7" ;;
+    15) macOSIconURL="https://ics.services.jamfcloud.com/icon/hash_0968afcd54ff99edd98ec6d9a418a5ab0c851576b687756dc3004ec52bac704e" ;;
+    26) macOSIconURL="https://ics.services.jamfcloud.com/icon/hash_7320c100c9ca155dc388e143dbc05620907e2d17d6bf74a8fb6d6278ece2c2b4" ;;
+    *) macOSIconURL="https://ics.services.jamfcloud.com/icon/hash_4555d9dc8fecb4e2678faffa8bdcf43cba110e81950e07a4ce3695ec2d5579ee" ;;
+esac
+
+echo "Downloading icon for macOS $targetMajor..."
+if curl -o "$osIconPath" "$macOSIconURL" --silent --fail; then
+    mainIcon="$osIconPath"
+    # Ensure user can read the icon
+    chmod 644 "$osIconPath"
+else
+    echo "Failed to download icon. Using Finder icon."
+    mainIcon="/System/Library/CoreServices/Finder.app"
 fi
 
 # --- DEFAULT UI (Standard Mode) ---
@@ -461,7 +533,8 @@ if [[ "$isDDM" == "true" ]]; then
         activeOverlay="$cautionIcon"
         helpText="For assistance with this required update, please [open a support ticket]($support_ticket_url)."
     else
-        echo "Error: Failed to calculate deadline epoch from $ddmDeadline"
+        echo "Error: Failed to calculate deadline epoch from $ddmDeadline. Exiting."
+        exit 0
     fi
 fi
 
