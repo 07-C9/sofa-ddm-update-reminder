@@ -321,6 +321,61 @@ effective_major_cap() {
     fi
 }
 
+# release_epoch_for_version <version> <sofaJSON>
+#
+# Looks up the SOFA ReleaseDate for an exact macOS version, checking
+# SecurityReleases first and then Latest, and prints it as epoch seconds.
+# SOFA publishes day-granular dates at midnight UTC, e.g. 2026-09-28T00:00:00Z.
+# Returns 1 when the version is not in the feed or has no parseable date.
+release_epoch_for_version() {
+    local version="$1"
+    local sofaData="$2"
+    local osCount osIdx relCount ridx relVer relDate osLatest relEpoch
+    osCount=$(echo "$sofaData" | plutil -extract "OSVersions" raw -o - - 2>/dev/null)
+    [[ "$osCount" =~ ^[0-9]+$ ]] || return 1
+    relDate=""
+    for (( osIdx=0; osIdx<osCount; osIdx++ )); do
+        relCount=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.SecurityReleases" raw -o - - 2>/dev/null)
+        [[ "$relCount" =~ ^[0-9]+$ ]] || relCount=0
+        for (( ridx=0; ridx<relCount; ridx++ )); do
+            relVer=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.SecurityReleases.$ridx.ProductVersion" raw -o - - 2>/dev/null)
+            if [[ "$relVer" == "$version" ]]; then
+                relDate=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.SecurityReleases.$ridx.ReleaseDate" raw -o - - 2>/dev/null)
+                break 2
+            fi
+        done
+        osLatest=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.Latest.ProductVersion" raw -o - - 2>/dev/null)
+        if [[ "$osLatest" == "$version" ]]; then
+            relDate=$(echo "$sofaData" | plutil -extract "OSVersions.$osIdx.Latest.ReleaseDate" raw -o - - 2>/dev/null)
+            break
+        fi
+    done
+    [[ -z "$relDate" ]] && return 1
+    relEpoch=$(date -juf "%Y-%m-%dT%H:%M:%SZ" "$relDate" "+%s" 2>/dev/null)
+    [[ "$relEpoch" =~ ^[0-9]+$ ]] || return 1
+    echo "$relEpoch"
+}
+
+# release_cleared_hold <version> <sofaJSON> <holdDays> <nowEpoch>
+#
+# Decides whether a release is old enough to recommend when no DDM enforcement
+# is ordering it. The hold ends holdDays plus one day after SOFA's ReleaseDate:
+# SOFA dates are midnight UTC while Apple publishes in the US daytime and counts
+# its own deferral from its release date, so the extra day keeps the reminder
+# from getting ahead of the Software Update deferral.
+# Returns 0 when the hold has ended, 1 while it is running, 2 when SOFA has no
+# usable release date for the version.
+release_cleared_hold() {
+    local version="$1"
+    local sofaData="$2"
+    local holdDays="$3"
+    local nowEpoch="$4"
+    local relEpoch
+    relEpoch=$(release_epoch_for_version "$version" "$sofaData") || return 2
+    (( nowEpoch >= relEpoch + (holdDays + 1) * 86400 )) && return 0
+    return 1
+}
+
 # --- Internal constants ---
 scriptVersion="6.11-Universal"
 sofaURL="https://sofafeed.macadmins.io/v2/macos_data_feed.json"

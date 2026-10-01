@@ -518,6 +518,26 @@ assert_eq "garbage current version keeps the pin" "26" "$(effective_major_cap "2
 
 # ============================================================
 echo ""
+echo "=== Test Suite: release hold ==="
+HOLD_SOFA='{"OSVersions":[{"Latest":{"ProductVersion":"27.0.1","ReleaseDate":"2026-09-28T00:00:00Z"},"SecurityReleases":[{"ProductVersion":"27.0.1","ReleaseDate":"2026-09-28T00:00:00Z"},{"ProductVersion":"27.0","ReleaseDate":"2026-09-14T00:00:00Z"}]},{"Latest":{"ProductVersion":"26.7.1","ReleaseDate":"2026-09-28T00:00:00Z"},"SecurityReleases":[{"ProductVersion":"26.7.1","ReleaseDate":"2026-09-28T00:00:00Z"},{"ProductVersion":"26.7"},{"ProductVersion":"26.6.2","ReleaseDate":"not-a-date"}]}]}'
+rel2671=$(date -juf "%Y-%m-%dT%H:%M:%SZ" "2026-09-28T00:00:00Z" "+%s")
+assert_eq "release epoch for 26.7.1" "$rel2671" "$(release_epoch_for_version "26.7.1" "$HOLD_SOFA")"
+assert_return "missing ReleaseDate returns 1" 1 release_epoch_for_version "26.7" "$HOLD_SOFA"
+assert_return "unparseable ReleaseDate returns 1" 1 release_epoch_for_version "26.6.2" "$HOLD_SOFA"
+assert_return "unknown version returns 1" 1 release_epoch_for_version "26.9" "$HOLD_SOFA"
+# Hold of 2 days ends at ReleaseDate + 3 days (one extra day because SOFA dates are midnight UTC)
+assert_return "1 second before hold end: still held" 1 release_cleared_hold "26.7.1" "$HOLD_SOFA" 2 $(( rel2671 + 3*86400 - 1 ))
+assert_return "exactly at hold end: cleared" 0 release_cleared_hold "26.7.1" "$HOLD_SOFA" 2 $(( rel2671 + 3*86400 ))
+assert_return "release day: held" 1 release_cleared_hold "27.0.1" "$HOLD_SOFA" 2 $(( rel2671 + 17*3600 ))
+assert_return "older release long cleared" 0 release_cleared_hold "27.0" "$HOLD_SOFA" 2 $(( rel2671 ))
+assert_return "no release date: unknown" 2 release_cleared_hold "26.7" "$HOLD_SOFA" 2 $(( rel2671 + 30*86400 ))
+assert_return "hold of 0 days still waits the extra day" 1 release_cleared_hold "26.7.1" "$HOLD_SOFA" 0 $(( rel2671 + 86400 - 1 ))
+# Real feed: every release the reminder could target must carry a usable date
+realLatest=$(echo "$SOFA_DATA" | plutil -extract "OSVersions.0.Latest.ProductVersion" raw -o - - 2>/dev/null)
+assert_return "real SOFA feed: newest release has a parseable ReleaseDate" 0 release_epoch_for_version "$realLatest" "$SOFA_DATA"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"
