@@ -102,6 +102,8 @@ exit 0
 EOF
 cat > "$STUBS/softwareupdate" <<'EOF'
 #!/bin/sh
+# STUB_SU_IGNORE_TERM makes the stub survive SIGTERM, like a client stuck in a state that ignores it
+[ -n "$STUB_SU_IGNORE_TERM" ] && trap '' TERM
 [ -n "$STUB_SU_DELAY" ] && /bin/sleep "$STUB_SU_DELAY"
 cat "$STUB_SU_FILE" 2>/dev/null
 EOF
@@ -178,7 +180,7 @@ tonight_queued() {
 # reset_defaults: a Mac on 26.6.2, no DDM order, no Install Tonight, 26.7.1 cleared and offered, no meeting
 reset_defaults() {
     export STUB_OS_VERSION="26.6.2" STUB_OS_BUILD="25G100" STUB_DIALOG_RC=0 STUB_MEETING_CALLS=0
-    unset STUB_USER_CHANGES_AFTER STUB_SU_DELAY
+    unset STUB_USER_CHANGES_AFTER STUB_SU_DELAY STUB_SU_IGNORE_TERM
     rm -f "$DDM_PLIST" "$INSTALL_LOG" "$REMINDER_PID"
     write_sofa "$CLEARED" "$CLEARED"
     su_offers "26.7.1"
@@ -287,6 +289,16 @@ assert_eq "exits 0" "0" "$RUN_RC"
 assert_contains "logs the timeout" "softwareupdate --list did not finish within 2 seconds" "$RUN_OUT"
 assert_eq "launches nothing" "" "$RUN_LAUNCH"
 assert_eq "script returned well before the stub would have" "fast" "$( (( RUN_SECONDS < 4.5 )) && echo fast || echo slow )"
+
+echo ""
+echo "--- softwareupdate --list hangs and ignores SIGTERM: still stopped, policy not held ---"
+reset_defaults
+export STUB_SU_DELAY=20 STUB_SU_IGNORE_TERM=1
+run_reminder
+assert_eq "exits 0 (not killed by the 30s watchdog)" "0" "$RUN_RC"
+assert_contains "logs the timeout" "softwareupdate --list did not finish within 2 seconds" "$RUN_OUT"
+assert_eq "script returned within a few seconds of the limit" "fast" "$( (( RUN_SECONDS < 8 )) && echo fast || echo slow )"
+pkill -f "sleep 20" 2>/dev/null
 
 echo ""
 echo "--- No install.log at all: no suppression, no error ---"

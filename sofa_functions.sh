@@ -336,8 +336,10 @@ su_offers_version() {
 # list_offered_updates <outFile> <maxSeconds>
 #
 # Runs `softwareupdate --list` into outFile with a time limit, so an unreachable
-# catalog can never hold the Jamf policy open. Returns 0 when the command
-# finished, 1 when it had to be stopped at the limit.
+# catalog can never hold the Jamf policy open. At the limit it sends SIGTERM,
+# allows 2 seconds, then sends SIGKILL, so a client that ignores SIGTERM cannot
+# hang the script either. Returns 0 when the command finished, 1 when it had to
+# be stopped at the limit.
 list_offered_updates() {
     local outFile="$1"
     local maxSeconds="$2"
@@ -347,6 +349,12 @@ list_offered_updates() {
     while kill -0 "$pid" 2>/dev/null; do
         if (( ticks >= maxSeconds * 10 )); then
             kill "$pid" 2>/dev/null
+            ticks=0
+            while kill -0 "$pid" 2>/dev/null && (( ticks < 20 )); do
+                /bin/sleep 0.1
+                (( ticks++ ))
+            done
+            kill -9 "$pid" 2>/dev/null
             wait "$pid" 2>/dev/null
             return 1
         fi
