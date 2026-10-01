@@ -535,42 +535,43 @@ meeting_in_progress() {
 # the console user and opens Software Update only when they click the button.
 # A meeting that outlasts the wait skips today's nudge; a DDM reminder is shown
 # anyway. Never shows the dialog if the console user changed while waiting.
+# Every path ends by removing the icon folder and the run lock.
 present_reminder() {
-    local checks=0 rc waitMinutes=$(( meetingCheckSeconds * meetingMaxChecks / 60 ))
+    local checks=0 rc show="true" waitMinutes=$(( meetingCheckSeconds * meetingMaxChecks / 60 ))
     echo "$(date '+%Y-%m-%d %H:%M:%S') Reminder for macOS $reminderVersion (DDM enforcement: $isDDM)"
     if [[ "$skipMeetingCheck" != "true" ]]; then
         while meeting_in_progress "$(pmset -g assertions 2>/dev/null)" "${meetingAssertionApps[@]}"; do
             if (( checks >= meetingMaxChecks )); then
                 if [[ "$isDDM" == "true" ]]; then
                     echo "Meeting or presentation still active after $waitMinutes minutes - showing the required-update reminder anyway."
-                    break
+                else
+                    echo "Meeting or presentation still active after $waitMinutes minutes - skipping today's reminder."
+                    show="false"
                 fi
-                echo "Meeting or presentation still active after $waitMinutes minutes - skipping today's reminder."
-                rm -f "$reminderPidPath"
-                echo "Presenter finished."
-                return 0
+                break
             fi
             (( checks++ ))
             echo "Meeting or presentation in progress (check $checks of $meetingMaxChecks) - waiting $meetingCheckSeconds seconds."
             sleep "$meetingCheckSeconds"
         done
     fi
-    if [[ "$(stat -f%Su /dev/console)" != "$currentUser" ]]; then
+    if [[ "$show" == "true" && "$(stat -f%Su /dev/console)" != "$currentUser" ]]; then
         echo "$currentUser is no longer the console user - skipping the reminder."
-        rm -f "$reminderPidPath"
-        echo "Presenter finished."
-        return 0
+        show="false"
     fi
-    launchctl asuser "$currentUserID" sudo -u "$currentUser" "${dialogArgs[@]}"
-    rc=$?
-    if (( rc == 0 )); then
-        echo "User clicked Open Software Update."
-        launchctl asuser "$currentUserID" sudo -u "$currentUser" open "$softwareUpdateURL"
-    elif (( rc == 4 )); then
-        echo "Reminder closed itself after $(( dialogTimeoutSeconds / 3600 )) hours with no answer."
-    else
-        echo "User dismissed the reminder (dialog exit $rc)."
+    if [[ "$show" == "true" ]]; then
+        launchctl asuser "$currentUserID" sudo -u "$currentUser" "${dialogArgs[@]}"
+        rc=$?
+        if (( rc == 0 )); then
+            echo "User clicked Open Software Update."
+            launchctl asuser "$currentUserID" sudo -u "$currentUser" open "$softwareUpdateURL"
+        elif (( rc == 4 )); then
+            echo "Reminder closed itself after $(( dialogTimeoutSeconds / 3600 )) hours with no answer."
+        else
+            echo "User dismissed the reminder (dialog exit $rc)."
+        fi
     fi
+    [[ -n "$iconDir" ]] && rm -rf "$iconDir"
     rm -f "$reminderPidPath"
     echo "Presenter finished."
 }
@@ -578,7 +579,6 @@ present_reminder() {
 # --- Internal constants ---
 scriptVersion="6.12-Universal"
 sofaURL="https://sofafeed.macadmins.io/v2/macos_data_feed.json"
-osIconPath="/var/tmp/os_icon.png"
 NL=$'\n'
 assistance_message="${NL}${NL}If you encounter any issues with the update process or don't have enough storage, please [open a support ticket]($support_ticket_url)."
 
@@ -794,7 +794,11 @@ case ${targetMajor} in
 esac
 
 echo "Downloading icon for macOS $targetMajor..."
-if curl -o "$osIconPath" "$macOSIconURL" --silent --fail; then
+# A private per-run folder: root never writes to a predictable path in the
+# world-writable /var/tmp, and the folder is removed when the presenter ends
+iconDir=$(mktemp -d /var/tmp/update_reminder.XXXXXX 2>/dev/null) && chmod 755 "$iconDir"
+osIconPath="$iconDir/os_icon.png"
+if [[ -n "$iconDir" ]] && curl --connect-timeout 5 -m 30 -o "$osIconPath" "$macOSIconURL" --silent --fail; then
     mainIcon="$osIconPath"
     # Ensure user can read the icon
     chmod 644 "$osIconPath"
@@ -856,6 +860,7 @@ echo "=== Phase 4: Launching Interface ==="
 
 if [[ ! -x "$swiftDialogPath" ]]; then
     echo "SwiftDialog not found. Exiting."
+    [[ -n "$iconDir" ]] && rm -rf "$iconDir"
     exit 1
 fi
 
@@ -890,6 +895,7 @@ if [[ -f "$reminderPidPath" ]]; then
     priorPid=$(cat "$reminderPidPath" 2>/dev/null)
     if [[ "$priorPid" =~ ^[0-9]+$ ]] && kill -0 "$priorPid" 2>/dev/null && [[ "$(ps -p "$priorPid" -o command= 2>/dev/null)" == *zsh* ]]; then
         echo "A reminder from an earlier run is still waiting or on screen - not stacking another. Exiting."
+        [[ -n "$iconDir" ]] && rm -rf "$iconDir"
         exit 0
     fi
 fi

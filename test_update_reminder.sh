@@ -81,9 +81,14 @@ echo J700AP
 EOF
 cat > "$STUBS/curl" <<'EOF'
 #!/bin/sh
+# Logs each call's arguments; serves the SOFA fixture; any other URL is a successful 3-byte download to -o
+{ echo "CALL"; for a in "$@"; do echo "$a"; done; } >> "$STUB_CURL_LOG"
 for a in "$@"; do
     case "$a" in *sofafeed*) cat "$STUB_SOFA_FILE"; exit 0 ;; esac
 done
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+[ -n "$out" ] && printf 'png' > "$out" && exit 0
 exit 22
 EOF
 cat > "$STUBS/sleep" <<'EOF'
@@ -191,8 +196,8 @@ reset_defaults() {
 # detached presenter. Sets RUN_RC, RUN_OUT, RUN_LAUNCH, RUN_LOG, RUN_SECONDS.
 run_reminder() {
     local pin="${1-26}"
-    export STUB_LAUNCH_LOG="$WORK/launch.log" STUB_PMSET_COUNT="$WORK/pmset.count" STUB_STAT_COUNT="$WORK/stat.count"
-    rm -f "$STUB_LAUNCH_LOG" "$STUB_PMSET_COUNT" "$STUB_STAT_COUNT" "$REMINDER_LOG"
+    export STUB_LAUNCH_LOG="$WORK/launch.log" STUB_PMSET_COUNT="$WORK/pmset.count" STUB_STAT_COUNT="$WORK/stat.count" STUB_CURL_LOG="$WORK/curl.log"
+    rm -f "$STUB_LAUNCH_LOG" "$STUB_PMSET_COUNT" "$STUB_STAT_COUNT" "$REMINDER_LOG" "$STUB_CURL_LOG"
     local started=$EPOCHREALTIME
     ( trap '' PIPE; PATH="$STUBS:$PATH" /bin/zsh "$SCRIPT_COPY" "/" "testhost" "testuser" "$pin" </dev/null > "$WORK/out.txt" 2>&1 ) &
     local pid=$! ticks=0
@@ -221,6 +226,7 @@ run_reminder() {
     fi
     RUN_LOG=$(cat "$REMINDER_LOG" 2>/dev/null)
     RUN_LAUNCH=$(cat "$STUB_LAUNCH_LOG" 2>/dev/null)
+    RUN_CURL=$(cat "$STUB_CURL_LOG" 2>/dev/null)
 }
 
 # launch_order: "dialog-then-open" when the dialog launched before Software Update opened
@@ -243,6 +249,19 @@ assert_contains "later button" "Later" "$RUN_LAUNCH"
 assert_not_contains "no enforcement overlay" "--overlayicon" "$RUN_LAUNCH"
 assert_eq "dialog first, then Settings" "dialog-then-open" "$(launch_order)"
 assert_contains "presenter logs the click" "User clicked Open Software Update" "$RUN_LOG"
+
+echo ""
+echo "--- Icon download: bounded in time, private temp folder, removed after the dialog ---"
+reset_defaults
+run_reminder
+iconCall=$(awk '/^CALL$/{n++} n>=1' <<< "$RUN_CURL" | awk 'BEGIN{RS="CALL\n"} /ics\.services\.jamfcloud\.com/{print}')
+iconPath=$(awk 'p{print; exit} $0=="-o"{p=1}' <<< "$iconCall")
+assert_contains "icon download has a connect timeout" "--connect-timeout" "$iconCall"
+assert_contains "icon download has a total time limit" "$(printf -- '-m\n')" "$iconCall"
+assert_not_contains "icon is not written to the fixed shared path" "/var/tmp/os_icon.png" "$iconCall"
+assert_contains "icon goes to a per-run folder" "/update_reminder." "$iconPath"
+assert_contains "dialog uses the downloaded icon" "$iconPath" "$RUN_LAUNCH"
+assert_eq "icon folder removed after the presenter finished" "absent" "$([[ -e "${iconPath:h}" ]] && echo present || echo absent)"
 
 echo ""
 echo "--- Nobody answers the dialog: it closes itself after 4 hours, logged, Settings stays closed ---"
