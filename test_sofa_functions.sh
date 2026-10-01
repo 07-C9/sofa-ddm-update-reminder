@@ -490,6 +490,25 @@ assert_eq "json without OSVersions not usable" "1" "$rc"
 
 # ============================================================
 echo ""
+echo "=== Test Suite: shared functions match the deployed script ==="
+# update_reminder.sh is pasted into Jamf as one self-contained file, so it carries
+# its own copy of every function. These checks keep that copy identical to the one
+# the unit tests exercise.
+REMINDER_SCRIPT="$SCRIPT_DIR/update_reminder.sh"
+sharedFns=( ${(f)"$(grep -oE '^[a-z_]+\(\) \{' "$SCRIPT_DIR/sofa_functions.sh" | sed 's/() {//')"} )
+scriptFns=( ${(f)"$(grep -oE '^[a-z_]+\(\) \{' "$REMINDER_SCRIPT" | sed 's/() {//')"} )
+for fn in $sharedFns; do
+    sharedBody=$(sed -n "/^$fn() {/,/^}/p" "$SCRIPT_DIR/sofa_functions.sh")
+    scriptBody=$(sed -n "/^$fn() {/,/^}/p" "$REMINDER_SCRIPT")
+    assert_eq "$fn is identical in update_reminder.sh" "$sharedBody" "$scriptBody"
+done
+for fn in $scriptFns; do
+    [[ "$fn" == "present_reminder" ]] && continue
+    assert_eq "$fn from update_reminder.sh is covered by sofa_functions.sh" "1" "$(grep -c "^$fn() {" "$SCRIPT_DIR/sofa_functions.sh")"
+done
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"

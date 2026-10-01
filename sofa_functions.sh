@@ -1,6 +1,6 @@
 #!/bin/zsh
-# ABOUTME: Shared functions for SOFA feed parsing and hardware-aware update targeting.
-# ABOUTME: Sourced by the main update notification script and by tests.
+# ABOUTME: Decision functions shared by the update reminder script and its unit tests.
+# ABOUTME: update_reminder.sh carries an identical copy; test_sofa_functions.sh enforces the match.
 
 # sofa_is_usable <sofaJSON>
 #
