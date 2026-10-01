@@ -91,6 +91,10 @@ meetingAssertionApps=( "MSTeams" "zoom.us" "Webex" "Slide Show" "Keynote" "Blink
 meetingCheckSeconds=300
 meetingMaxChecks=15
 
+# Seconds before an unanswered dialog closes itself, so an ignored reminder
+# cannot hold the run lock and block the next day's reminder (14400 = 4 hours)
+dialogTimeoutSeconds=14400
+
 # Software Update pane opened by the dialog's button
 softwareUpdateURL="x-apple.systempreferences:com.apple.Software-Update-Settings.extension"
 
@@ -562,6 +566,8 @@ present_reminder() {
     if (( rc == 0 )); then
         echo "User clicked Open Software Update."
         launchctl asuser "$currentUserID" sudo -u "$currentUser" open "$softwareUpdateURL"
+    elif (( rc == 4 )); then
+        echo "Reminder closed itself after $(( dialogTimeoutSeconds / 3600 )) hours with no answer."
     else
         echo "User dismissed the reminder (dialog exit $rc)."
     fi
@@ -864,6 +870,8 @@ dialogArgs=(
     --height "500"       # Static height prevents layout shift when remote image loads
     --button1text "Open Software Update"
     --button2text "Later"
+    --timer "$dialogTimeoutSeconds"
+    --hidetimerbar
     --ontop
     --moveable
     --titlefont "size=16"

@@ -245,6 +245,16 @@ assert_eq "dialog first, then Settings" "dialog-then-open" "$(launch_order)"
 assert_contains "presenter logs the click" "User clicked Open Software Update" "$RUN_LOG"
 
 echo ""
+echo "--- Nobody answers the dialog: it closes itself after 4 hours, logged, Settings stays closed ---"
+reset_defaults
+export STUB_DIALOG_RC=4
+run_reminder
+assert_contains "dialog has a 4-hour timer" "$(printf -- '--timer\n14400')" "$RUN_LAUNCH"
+assert_contains "timer bar hidden" "--hidetimerbar" "$RUN_LAUNCH"
+assert_contains "presenter logs the timeout" "Reminder closed itself after 4 hours with no answer." "$RUN_LOG"
+assert_not_contains "Settings not opened" "x-apple.systempreferences" "$RUN_LAUNCH"
+
+echo ""
 echo "--- No order, user clicks Later: Settings stays closed ---"
 reset_defaults
 export STUB_DIALOG_RC=2
