@@ -3,7 +3,7 @@
 # ABOUTME: Self-contained script for Jamf deployment — no external dependencies.
 
 ####################################################################################################
-# HYBRID UPDATE REMINDER - UNIVERSAL EDITION v6.11
+# HYBRID UPDATE REMINDER - UNIVERSAL EDITION v6.12
 #
 # A "Set it and forget it" script that handles both standard updates and DDM enforcement.
 #
@@ -14,8 +14,13 @@
 # 3. Native Branding: Uses Markdown to render remote logos perfectly without local resizing.
 # 4. SOFA Feed Integration: Checks against MacAdmins.io SOFA feed for truth.
 # 5. Hardware-Aware Targeting: Matches updates to device board ID via SOFA SupportedDevices.
-# 6. Enforcement-Only Reminders: Shows a dialog only when a DDM enforcement is ordering
-#    an update, and only for the enforced version. No enforcement = silent exit.
+# 6. Daily Nudge Without DDM: with no DDM enforcement, recommends the newest
+#    release only after it has cleared a release hold AND Software Update on the
+#    Mac is offering it.
+# 7. Respectful Timing: waits out meetings and presentations, and stays quiet on
+#    a day the user already chose Install Tonight.
+# 8. User-Driven Settings: the dialog's button opens Software Update; nothing
+#    opens on its own.
 ####################################################################################################
 
 # --- SAFETY CHECK: Force Zsh Execution ---
@@ -61,6 +66,33 @@ if [[ -n "$maxMajorPin" && ! "$maxMajorPin" =~ ^[0-9]+$ ]]; then
     echo "WARNING: Ignoring non-numeric version pin '$maxMajorPin' (parameter 4)."
     maxMajorPin=""
 fi
+
+# Days a new macOS release is held before the reminder recommends it when no DDM
+# enforcement is active. Counted from SOFA's ReleaseDate plus one day, matching
+# a Software Update minor deferral of the same length.
+releaseHoldDays=2
+
+# Seconds to wait for `softwareupdate --list` before giving up quietly
+softwareUpdateListSeconds=90
+
+# Apple's software update log, read for the user's Install Tonight choice
+installLogPath="/var/log/install.log"
+
+# Log and lock for the presenter that waits out meetings and shows the dialog
+reminderLogPath="/var/log/update_reminder.log"
+reminderPidPath="/var/run/update_reminder.pid"
+
+# Apps or assertion names that mean a meeting or presentation is on screen
+# (matched against `pmset -g assertions` display-sleep lines)
+meetingAssertionApps=( "MSTeams" "zoom.us" "Webex" "Slide Show" "Keynote" "Blink Wake Lock" )
+
+# Meeting wait: re-check every meetingCheckSeconds, at most meetingMaxChecks times
+# (300 x 15 = 75 minutes)
+meetingCheckSeconds=300
+meetingMaxChecks=15
+
+# Software Update pane opened by the dialog's button
+softwareUpdateURL="x-apple.systempreferences:com.apple.Software-Update-Settings.extension"
 
 ####################################################################################################
 # END CONFIGURATION
@@ -473,8 +505,26 @@ meeting_in_progress() {
     return 1
 }
 
+# present_reminder
+#
+# Shows the reminder dialog to the console user and opens Software Update only
+# when they click the button. Uses the globals built by the main flow.
+present_reminder() {
+    local rc
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Reminder for macOS $reminderVersion (DDM enforcement: $isDDM)"
+    launchctl asuser "$currentUserID" sudo -u "$currentUser" "${dialogArgs[@]}"
+    rc=$?
+    if (( rc == 0 )); then
+        echo "User clicked Open Software Update."
+        launchctl asuser "$currentUserID" sudo -u "$currentUser" open "$softwareUpdateURL"
+    else
+        echo "User dismissed the reminder (dialog exit $rc)."
+    fi
+    echo "Presenter finished."
+}
+
 # --- Internal constants ---
-scriptVersion="6.11-Universal"
+scriptVersion="6.12-Universal"
 sofaURL="https://sofafeed.macadmins.io/v2/macos_data_feed.json"
 osIconPath="/var/tmp/os_icon.png"
 NL=$'\n'
@@ -621,19 +671,62 @@ else
     echo "No DDM state file found."
 fi
 
-# The reminder only ever points users at the version a DDM enforcement is
-# ordering. With no active enforcement, stay quiet rather than nag toward
-# SOFA's latest, which on release day is a minor nobody has tested yet.
-if [[ "$isDDM" == "false" ]]; then
-    if [[ "$demoMode" == "true" ]]; then
-        echo "DEMO MODE: No active DDM enforcement, showing the standard dialog anyway."
-    else
-        echo "No active DDM enforcement - nothing to remind. Exiting."
-        exit 0
-    fi
-else
+nowEpoch=$(date +%s)
+deadlineEpoch=""
+skipMeetingCheck="false"
+
+if [[ "$isDDM" == "true" ]]; then
+    reminderVersion="$ddmVersion"
     # Icon matches the enforced version, not SOFA's newest
     targetMajor="${ddmVersion%%.*}"
+    deadlineEpoch=$(date -jf "%Y-%m-%dT%H:%M:%S" "$ddmDeadline" "+%s" 2>/dev/null)
+    if [[ -z "$deadlineEpoch" ]]; then
+        echo "Error: Failed to calculate deadline epoch from $ddmDeadline. Exiting."
+        exit 0
+    fi
+    # Apple shows its own enforcement notices regardless of Focus in the last 24 hours
+    if (( deadlineEpoch - nowEpoch < 86400 )); then
+        skipMeetingCheck="true"
+    fi
+elif [[ "$demoMode" == "true" ]]; then
+    echo "DEMO MODE: No active DDM enforcement, showing the standard dialog anyway."
+    reminderVersion="$latestVersion"
+else
+    reminderVersion="$latestVersion"
+    release_cleared_hold "$latestVersion" "$sofaData" "$releaseHoldDays" "$nowEpoch"
+    case $? in
+        0) echo "macOS $latestVersion has cleared the ${releaseHoldDays}-day release hold." ;;
+        1) echo "macOS $latestVersion is still inside its ${releaseHoldDays}-day release hold - no reminder yet. Exiting."
+           exit 0 ;;
+        *) echo "WARNING: SOFA has no usable ReleaseDate for macOS $latestVersion - cannot apply the release hold. Exiting."
+           exit 0 ;;
+    esac
+fi
+
+# The user already chose Install Tonight for this version: today's reminder would only repeat it
+if [[ "$demoMode" != "true" && -r "$installLogPath" ]]; then
+    tonightLines=$(grep -a -E 'Updated install tonight state|Updates queued for later: \[' "$installLogPath" 2>/dev/null)
+    if install_tonight_pending "$reminderVersion" "$tonightLines" "$nowEpoch" "$deadlineEpoch"; then
+        echo "User already chose Install Tonight for macOS $reminderVersion - no reminder today. Exiting."
+        exit 0
+    fi
+fi
+
+# With no enforcement, only recommend what Software Update on this Mac is actually offering
+if [[ "$isDDM" == "false" && "$demoMode" != "true" ]]; then
+    suListFile=$(mktemp /tmp/update_reminder_su.XXXXXX)
+    if ! list_offered_updates "$suListFile" "$softwareUpdateListSeconds"; then
+        rm -f "$suListFile"
+        echo "WARNING: softwareupdate --list did not finish within $softwareUpdateListSeconds seconds - no reminder. Exiting."
+        exit 0
+    fi
+    suList=$(cat "$suListFile")
+    rm -f "$suListFile"
+    if ! su_offers_version "$latestVersion" "$suList"; then
+        echo "Software Update is not offering macOS $latestVersion on this Mac yet (deferred or not yet visible) - no reminder. Exiting."
+        exit 0
+    fi
+    echo "Software Update is offering macOS $latestVersion."
 fi
 
 # --- STEP 3: DOWNLOAD ASSETS ---
@@ -663,14 +756,14 @@ title="macOS $latestVersion Available"
 
 # Message construction
 # Uses Markdown for the logo to allow remote URL loading without local resizing artifacts
-baseMessage="![Organization Logo]($corporateLogoURL)${NL}${NL}**A new software update is available for your Mac.**${NL}${NL}Keeping your Mac up to date ensures you have the latest security features and performance improvements.${NL}${NL}We have opened **Software Update** settings for you to proceed."
+baseMessage="![Organization Logo]($corporateLogoURL)${NL}${NL}**A software update is available for your Mac.**${NL}${NL}Keeping your Mac up to date ensures you have the latest security features and performance improvements.${NL}${NL}Click **Open Software Update** to install it."
 
 # Append the assistance message
 message="$baseMessage$assistance_message"
 
 # InfoBox: Left-aligned stats
 # Formatting: Bold Label / Plain Value
-infobox="**Current macOS:** :red[$currentVersion]${NL}${NL}**Required macOS:** :green[$latestVersion]"
+infobox="**Current macOS:** :red[$currentVersion]${NL}${NL}**Latest macOS:** :green[$latestVersion]"
 
 # Overlay: None for standard mode
 activeOverlay="none"
@@ -678,10 +771,6 @@ helpText="For assistance, please [open a support ticket]($support_ticket_url)."
 
 # --- DDM OVERRIDE (Enforced Mode) ---
 if [[ "$isDDM" == "true" ]]; then
-    # Calculate Deadline
-    deadlineEpoch=$(date -jf "%Y-%m-%dT%H:%M:%S" "$ddmDeadline" "+%s" 2>/dev/null)
-    nowEpoch=$(date +%s)
-
     if [[ -n "$deadlineEpoch" ]]; then
         secondsLeft=$((deadlineEpoch - nowEpoch))
         daysLeft=$(( (secondsLeft + 43200) / 86400 ))
@@ -697,9 +786,9 @@ if [[ "$isDDM" == "true" ]]; then
         title="Software Update Required: macOS $ddmVersion"
 
         if [[ "$daysLeft" == "Overdue" ]]; then
-            baseMessage="![Organization Logo]($corporateLogoURL)${NL}${NL}**Action Required: macOS Update**${NL}${NL}Your Mac must be updated to **macOS $ddmVersion** immediately. The update deadline has passed.${NL}${NL}We have opened **Software Update** settings for you.${NL}${NL}Your Mac will **automatically restart** to install this update soon if no action is taken."
+            baseMessage="![Organization Logo]($corporateLogoURL)${NL}${NL}**Action Required: macOS Update**${NL}${NL}Your Mac must be updated to **macOS $ddmVersion** immediately. The update deadline has passed.${NL}${NL}Click **Open Software Update** to install it.${NL}${NL}Your Mac will **automatically restart** to install this update soon if no action is taken."
         else
-            baseMessage="![Organization Logo]($corporateLogoURL)${NL}${NL}**Action Required: macOS Update**${NL}${NL}Your Mac must be updated to **macOS $ddmVersion** to remain compliant.${NL}${NL}We have opened **Software Update** settings for you.${NL}${NL}If no action is taken, your Mac will **automatically restart** to install this update at the deadline shown."
+            baseMessage="![Organization Logo]($corporateLogoURL)${NL}${NL}**Action Required: macOS Update**${NL}${NL}Your Mac must be updated to **macOS $ddmVersion** to remain compliant.${NL}${NL}Click **Open Software Update** to install it.${NL}${NL}If no action is taken, your Mac will **automatically restart** to install this update at the deadline shown."
         fi
         message="$baseMessage$assistance_message"
 
@@ -707,9 +796,6 @@ if [[ "$isDDM" == "true" ]]; then
 
         activeOverlay="$cautionIcon"
         helpText="For assistance with this required update, please [open a support ticket]($support_ticket_url)."
-    else
-        echo "Error: Failed to calculate deadline epoch from $ddmDeadline. Exiting."
-        exit 0
     fi
 fi
 
@@ -730,7 +816,8 @@ dialogArgs=(
     --infobox "$infobox"
     --iconsize "150"
     --height "500"       # Static height prevents layout shift when remote image loads
-    --button1text "OK"
+    --button1text "Open Software Update"
+    --button2text "Later"
     --ontop
     --moveable
     --titlefont "size=16"
@@ -744,13 +831,6 @@ if [[ "$activeOverlay" != "none" ]]; then
     dialogArgs+=(--overlayicon "$activeOverlay")
 fi
 
-# Execute
-# 1. Launch System Settings FIRST
-echo "Opening System Settings..."
-launchctl asuser "$currentUserID" sudo -u "$currentUser" open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"
-
-# 2. Launch Dialog
-echo "Launching Dialog..."
-launchctl asuser "$currentUserID" sudo -u "$currentUser" "${dialogArgs[@]}" &
-
+echo "Handing the reminder to the presenter (log: $reminderLogPath)."
+present_reminder >> "$reminderLogPath" 2>&1 < /dev/null
 exit 0

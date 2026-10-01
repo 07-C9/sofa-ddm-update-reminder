@@ -1,9 +1,10 @@
 #!/bin/zsh
 # ABOUTME: End-to-end tests for the update reminder script, run under Jamf-like conditions with stubbed system commands.
-# ABOUTME: Verifies the reminder stays silent without a DDM enforcement and shows the enforced version and deadline with one.
+# ABOUTME: Covers the no-order nudge gates, the DDM dialog, Install Tonight, meeting waits and the detached presenter.
 
 SCRIPT_DIR="${0:A:h}"
 REMINDER="$SCRIPT_DIR/update_reminder.sh"
+zmodload zsh/datetime
 
 PASS=0
 FAIL=0
@@ -63,7 +64,9 @@ if [ "$#" -eq 1 ] && [ "$1" = "-u" ]; then echo 0; else echo 501; fi
 EOF
 cat > "$STUBS/stat" <<'EOF'
 #!/bin/sh
-echo testuser
+# The console user is testuser, or otheruser once STUB_USER_CHANGES_AFTER calls have been made
+n=$(cat "$STUB_STAT_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$STUB_STAT_COUNT"
+if [ -n "$STUB_USER_CHANGES_AFTER" ] && [ "$n" -gt "$STUB_USER_CHANGES_AFTER" ]; then echo otheruser; else echo testuser; fi
 EOF
 cat > "$STUBS/sw_vers" <<'EOF'
 #!/bin/sh
@@ -90,41 +93,106 @@ EOF
 cat > "$STUBS/launchctl" <<'EOF'
 #!/bin/sh
 { echo "CALL"; for a in "$@"; do echo "$a"; done; } >> "$STUB_LAUNCH_LOG"
+for a in "$@"; do case "$a" in */dialog) exit "${STUB_DIALOG_RC:-0}" ;; esac; done
+exit 0
 EOF
 cat > "$STUBS/dialog" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
+cat > "$STUBS/softwareupdate" <<'EOF'
+#!/bin/sh
+[ -n "$STUB_SU_DELAY" ] && /bin/sleep "$STUB_SU_DELAY"
+cat "$STUB_SU_FILE" 2>/dev/null
+EOF
+cat > "$STUBS/pmset" <<'EOF'
+#!/bin/sh
+# Reports a meeting for the first STUB_MEETING_CALLS calls, then an idle Mac
+n=$(cat "$STUB_PMSET_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$STUB_PMSET_COUNT"
+if [ "$n" -le "${STUB_MEETING_CALLS:-0}" ]; then
+    echo '   pid 24542(Webex): [0x1] 00:12:01 PreventUserIdleDisplaySleep named: "On a call"'
+else
+    echo '   pid 567(powerd): [0x2] 05:10:07 PreventUserIdleSystemSleep named: "Powerd - Prevent sleep while display is on"'
+fi
+EOF
 chmod +x "$STUBS"/*
 
-# --- Copy of the real script with the DDM state plist and SwiftDialog paths pointed at fixtures ---
+# --- Copy of the real script with system paths pointed at fixtures and a short softwareupdate limit ---
 SCRIPT_COPY="$WORK/reminder.sh"
 DDM_PLIST="$WORK/SoftwareUpdateDDMStatePersistence.plist"
+INSTALL_LOG="$WORK/install.log"
+REMINDER_LOG="$WORK/update_reminder.log"
+REMINDER_PID="$WORK/update_reminder.pid"
 sed -e "s|^ddmPlistPath=.*|ddmPlistPath=\"$DDM_PLIST\"|" \
     -e "s|^swiftDialogPath=.*|swiftDialogPath=\"$STUBS/dialog\"|" \
+    -e "s|^installLogPath=.*|installLogPath=\"$INSTALL_LOG\"|" \
+    -e "s|^reminderLogPath=.*|reminderLogPath=\"$REMINDER_LOG\"|" \
+    -e "s|^reminderPidPath=.*|reminderPidPath=\"$REMINDER_PID\"|" \
+    -e "s|^softwareUpdateListSeconds=.*|softwareUpdateListSeconds=2|" \
     "$REMINDER" > "$SCRIPT_COPY"
-if ! grep -q "^ddmPlistPath=\"$DDM_PLIST\"" "$SCRIPT_COPY" || ! grep -q "^swiftDialogPath=\"$STUBS/dialog\"" "$SCRIPT_COPY"; then
-    echo "FATAL: Could not redirect ddmPlistPath/swiftDialogPath in the script copy."
-    exit 1
-fi
+for check in "^ddmPlistPath=\"$DDM_PLIST\"" "^swiftDialogPath=\"$STUBS/dialog\"" "^installLogPath=\"$INSTALL_LOG\"" \
+             "^reminderLogPath=\"$REMINDER_LOG\"" "^reminderPidPath=\"$REMINDER_PID\"" "^softwareUpdateListSeconds=2"; do
+    if ! grep -q "$check" "$SCRIPT_COPY"; then
+        echo "FATAL: script copy is missing redirect $check"
+        exit 1
+    fi
+done
 
-# --- SOFA fixture: 27.0 exists (pinned away), 26.7.2 is the brand-new untested minor ---
-export STUB_SOFA_FILE="$WORK/sofa.json"
-cat > "$STUB_SOFA_FILE" <<'EOF'
-{"OSVersions":[{"OSVersion":"27","Latest":{"ProductVersion":"27.0","Build":"27A000","SupportedDevices":["J700AP"]},"SecurityReleases":[{"ProductVersion":"27.0"}]},{"OSVersion":"26","Latest":{"ProductVersion":"26.7.2","Build":"25G400","AllBuilds":["25G400"],"SupportedDevices":["J700AP"]},"SecurityReleases":[{"ProductVersion":"26.7.2"},{"ProductVersion":"26.7.1"},{"ProductVersion":"26.6.2"}]}]}
+# --- Fixtures ---
+export STUB_SOFA_FILE="$WORK/sofa.json" STUB_SU_FILE="$WORK/su_list.txt"
+CLEARED=$(date -ju -v-5d "+%Y-%m-%dT00:00:00Z")   # well past a 2-day hold
+FRESH=$(date -ju "+%Y-%m-%dT00:00:00Z")           # released today: inside the hold
+
+# write_sofa <26.7.1 ReleaseDate> <27.0.1 ReleaseDate>: SOFA feed with 27.0.1 and 26.7.1 as the newest releases
+write_sofa() {
+    cat > "$STUB_SOFA_FILE" <<EOF
+{"OSVersions":[{"OSVersion":"27","Latest":{"ProductVersion":"27.0.1","Build":"26A434","AllBuilds":["26A434"],"ReleaseDate":"$2","SupportedDevices":["J700AP"]},"SecurityReleases":[{"ProductVersion":"27.0.1","ReleaseDate":"$2"},{"ProductVersion":"27.0","ReleaseDate":"$CLEARED"}]},{"OSVersion":"26","Latest":{"ProductVersion":"26.7.1","Build":"25G241","AllBuilds":["25G241"],"ReleaseDate":"$1","SupportedDevices":["J700AP"]},"SecurityReleases":[{"ProductVersion":"26.7.1","ReleaseDate":"$1"},{"ProductVersion":"26.7","ReleaseDate":"$CLEARED"},{"ProductVersion":"26.6.2","ReleaseDate":"$CLEARED"}]}]}
 EOF
+}
+
+# su_offers <version>: softwareupdate --list output offering one macOS version
+su_offers() {
+    printf 'Software Update Tool\n\nFinding available software\nSoftware Update found the following new or updated software:\n* Label: macOS %s-X\n\tTitle: macOS %s, Version: %s, Size: 1KiB, Recommended: YES, Action: restart, \n' "$1" "$1" "$1" > "$STUB_SU_FILE"
+}
+
+# su_nothing: softwareupdate --list output with nothing offered
+su_nothing() {
+    printf 'Software Update Tool\n\nFinding available software\nNo new software available.\n' > "$STUB_SU_FILE"
+}
 
 # write_ddm_plist <json>: writes a DDM state fixture in Apple's XML plist format
 write_ddm_plist() {
     echo "$1" | plutil -convert xml1 -o "$DDM_PLIST" -
 }
 
-# run_reminder: runs the script copy the way Jamf does (SIGPIPE ignored, no stdin,
-# parameter 4 = 26) behind a 30s watchdog. Sets RUN_RC, RUN_OUT, RUN_LAUNCH.
+# ddm_order <version> <localDeadline>: DDM state with one Blueprint enforcement
+ddm_order() {
+    write_ddm_plist "{\"SUCorePersistedStatePolicyFields\":{\"Declarations\":{\"Blueprint_test_sys_cfg\":{\"TargetOSVersion\":\"$1\",\"TargetLocalDateTime\":\"$2\"}}}}"
+}
+
+# tonight_queued <version> <localTimestamp>: install.log lines for an Install Tonight choice
+tonight_queued() {
+    printf '%s-07 TESTMAC001 SoftwareUpdateSettingsExtension[1]: x: Updates queued for later: [<SUOSUProduct: MSU_UPDATE_25X000_patch_%s_minor>], mode: SUOSULaterMode(rawValue: 1)\n%s-07 TESTMAC001 SoftwareUpdateSettingsExtension[1]: x: Updated install tonight state (enabled = true, restart = true)\n' "$2" "$1" "$2" > "$INSTALL_LOG"
+}
+
+# reset_defaults: a Mac on 26.6.2, no DDM order, no Install Tonight, 26.7.1 cleared and offered, no meeting
+reset_defaults() {
+    export STUB_OS_VERSION="26.6.2" STUB_OS_BUILD="25G100" STUB_DIALOG_RC=0 STUB_MEETING_CALLS=0
+    unset STUB_USER_CHANGES_AFTER STUB_SU_DELAY
+    rm -f "$DDM_PLIST" "$INSTALL_LOG" "$REMINDER_PID"
+    write_sofa "$CLEARED" "$CLEARED"
+    su_offers "26.7.1"
+}
+
+# run_reminder [pin]: runs the script copy the way Jamf does (SIGPIPE ignored, no stdin,
+# parameter 4 = pin, default 26) behind a 30s watchdog, then waits up to 15s for the
+# detached presenter. Sets RUN_RC, RUN_OUT, RUN_LAUNCH, RUN_LOG, RUN_SECONDS.
 run_reminder() {
-    export STUB_LAUNCH_LOG="$WORK/launch.log"
-    rm -f "$STUB_LAUNCH_LOG"
-    ( trap '' PIPE; PATH="$STUBS:$PATH" /bin/zsh "$SCRIPT_COPY" "/" "testhost" "testuser" "26" </dev/null > "$WORK/out.txt" 2>&1 ) &
+    local pin="${1-26}"
+    export STUB_LAUNCH_LOG="$WORK/launch.log" STUB_PMSET_COUNT="$WORK/pmset.count" STUB_STAT_COUNT="$WORK/stat.count"
+    rm -f "$STUB_LAUNCH_LOG" "$STUB_PMSET_COUNT" "$STUB_STAT_COUNT" "$REMINDER_LOG"
+    local started=$EPOCHREALTIME
+    ( trap '' PIPE; PATH="$STUBS:$PATH" /bin/zsh "$SCRIPT_COPY" "/" "testhost" "testuser" "$pin" </dev/null > "$WORK/out.txt" 2>&1 ) &
     local pid=$! ticks=0
     while kill -0 $pid 2>/dev/null; do
         if (( ticks >= 300 )); then
@@ -132,6 +200,7 @@ run_reminder() {
             RUN_RC=124
             RUN_OUT="HUNG: watchdog killed the script after 30s"
             RUN_LAUNCH=""
+            RUN_LOG=""
             return
         fi
         /bin/sleep 0.1
@@ -139,56 +208,175 @@ run_reminder() {
     done
     wait $pid
     RUN_RC=$?
-    # The dialog launch is backgrounded by the script; give the stub a moment to finish logging it
-    ticks=0
-    while (( ticks < 20 )) && [[ -f "$STUB_LAUNCH_LOG" ]] && (( $(grep -c '^CALL$' "$STUB_LAUNCH_LOG") < 2 )); do
-        /bin/sleep 0.1
-        (( ticks++ ))
-    done
+    RUN_SECONDS=$(( EPOCHREALTIME - started ))
     RUN_OUT=$(cat "$WORK/out.txt")
+    ticks=0
+    if [[ "$RUN_OUT" == *"Handing the reminder to the presenter"* ]]; then
+        while (( ticks < 150 )) && ! grep -q '^Presenter finished\.$' "$REMINDER_LOG" 2>/dev/null; do
+            /bin/sleep 0.1
+            (( ticks++ ))
+        done
+    fi
+    RUN_LOG=$(cat "$REMINDER_LOG" 2>/dev/null)
     RUN_LAUNCH=$(cat "$STUB_LAUNCH_LOG" 2>/dev/null)
+}
+
+# launch_order: "dialog-then-open" when the dialog launched before Software Update opened
+launch_order() {
+    awk '/\/dialog$/{if(!d)d=NR} /x-apple.systempreferences/{if(!o)o=NR} END{print (d && o && d<o) ? "dialog-then-open" : "wrong order"}' <<< "$RUN_LAUNCH"
 }
 
 echo "=== Test Suite: update reminder end to end (Jamf context) ==="
 
 echo ""
-echo "--- No DDM state file, newer minor in SOFA: silent exit ---"
-rm -f "$DDM_PLIST"
-export STUB_OS_VERSION="26.7.1" STUB_OS_BUILD="25G300"
+echo "--- No order, 26.7.1 cleared the hold and Software Update offers it: gentle nudge ---"
+reset_defaults
 run_reminder
 assert_eq "exits 0" "0" "$RUN_RC"
-assert_contains "logs no-enforcement line" "No active DDM enforcement - nothing to remind" "$RUN_OUT"
-assert_eq "launches nothing (no dialog, no Settings)" "" "$RUN_LAUNCH"
+assert_contains "logs the cleared hold" "macOS 26.7.1 has cleared the 2-day release hold" "$RUN_OUT"
+assert_contains "dialog title" "macOS 26.7.1 Available" "$RUN_LAUNCH"
+assert_contains "nudge infobox" "**Latest macOS:** :green[26.7.1]" "$RUN_LAUNCH"
+assert_contains "button opens Software Update" "Open Software Update" "$RUN_LAUNCH"
+assert_contains "later button" "Later" "$RUN_LAUNCH"
+assert_not_contains "no enforcement overlay" "--overlayicon" "$RUN_LAUNCH"
+assert_eq "dialog first, then Settings" "dialog-then-open" "$(launch_order)"
+assert_contains "presenter logs the click" "User clicked Open Software Update" "$RUN_LOG"
 
 echo ""
-echo "--- Empty DDM state plist (no order on the Mac): silent exit ---"
-write_ddm_plist '{}'
+echo "--- No order, user clicks Later: Settings stays closed ---"
+reset_defaults
+export STUB_DIALOG_RC=2
+run_reminder
+assert_contains "dialog shown" "macOS 26.7.1 Available" "$RUN_LAUNCH"
+assert_not_contains "Settings not opened" "x-apple.systempreferences" "$RUN_LAUNCH"
+assert_contains "presenter logs the dismissal" "User dismissed the reminder (dialog exit 2)" "$RUN_LOG"
+
+echo ""
+echo "--- No order, 26.7.1 released today: inside the hold, silent ---"
+reset_defaults
+write_sofa "$FRESH" "$CLEARED"
 run_reminder
 assert_eq "exits 0" "0" "$RUN_RC"
-assert_contains "logs no-enforcement line" "No active DDM enforcement - nothing to remind" "$RUN_OUT"
+assert_contains "logs the hold" "macOS 26.7.1 is still inside its 2-day release hold" "$RUN_OUT"
 assert_eq "launches nothing" "" "$RUN_LAUNCH"
 
 echo ""
-echo "--- Enforcement already satisfied (on 26.7.1, order for 26.7.1): silent exit ---"
-write_ddm_plist '{"SUCorePersistedStatePolicyFields":{"Declarations":{"Blueprint_test_sys_cfg":{"TargetOSVersion":"26.7.1","TargetLocalDateTime":"2026-10-08T21:00:00"}}}}'
+echo "--- No order, SOFA has no ReleaseDate for the target: silent warning ---"
+reset_defaults
+echo '{"OSVersions":[{"OSVersion":"26","Latest":{"ProductVersion":"26.7.1","Build":"25G241","AllBuilds":["25G241"],"SupportedDevices":["J700AP"]},"SecurityReleases":[{"ProductVersion":"26.7.1"},{"ProductVersion":"26.6.2"}]}]}' > "$STUB_SOFA_FILE"
 run_reminder
 assert_eq "exits 0" "0" "$RUN_RC"
-assert_contains "logs no-enforcement line" "No active DDM enforcement - nothing to remind" "$RUN_OUT"
+assert_contains "logs missing date" "SOFA has no usable ReleaseDate for macOS 26.7.1" "$RUN_OUT"
 assert_eq "launches nothing" "" "$RUN_LAUNCH"
 
 echo ""
-echo "--- Active enforcement for 26.7.1 while SOFA has 26.7.2: DDM dialog for the enforced version ---"
-export STUB_OS_VERSION="26.6.2" STUB_OS_BUILD="25G100"
+echo "--- No order, hold cleared but Software Update is not offering it: silent ---"
+reset_defaults
+su_nothing
 run_reminder
-expectedDeadline=$(date -jf "%Y-%m-%dT%H:%M:%S" "2026-10-08T21:00:00" "+%A, %b %d at %I:%M %p")
 assert_eq "exits 0" "0" "$RUN_RC"
-assert_contains "logs the enforcement" "Found active enforcement: macOS 26.7.1 by 2026-10-08T21:00:00" "$RUN_OUT"
-assert_contains "dialog title names the enforced version" "Software Update Required: macOS 26.7.1" "$RUN_LAUNCH"
-assert_contains "infobox shows the enforced version" "**Required macOS:** :green[26.7.1]" "$RUN_LAUNCH"
-assert_contains "infobox shows the deadline" "**Deadline:** $expectedDeadline" "$RUN_LAUNCH"
-assert_contains "dialog carries the enforcement overlay" "--overlayicon" "$RUN_LAUNCH"
-assert_not_contains "never mentions the untested 26.7.2" "26.7.2" "$RUN_LAUNCH"
-assert_contains "opens Software Update settings" "x-apple.systempreferences:com.apple.Software-Update-Settings.extension" "$RUN_LAUNCH"
+assert_contains "logs the gate" "Software Update is not offering macOS 26.7.1 on this Mac yet" "$RUN_OUT"
+assert_eq "launches nothing" "" "$RUN_LAUNCH"
+
+echo ""
+echo "--- softwareupdate --list hangs past the limit: silent, policy not held ---"
+reset_defaults
+export STUB_SU_DELAY=5
+run_reminder
+assert_eq "exits 0" "0" "$RUN_RC"
+assert_contains "logs the timeout" "softwareupdate --list did not finish within 2 seconds" "$RUN_OUT"
+assert_eq "launches nothing" "" "$RUN_LAUNCH"
+assert_eq "script returned well before the stub would have" "fast" "$( (( RUN_SECONDS < 4.5 )) && echo fast || echo slow )"
+
+echo ""
+echo "--- No install.log at all: no suppression, no error ---"
+reset_defaults
+run_reminder
+assert_eq "exits 0" "0" "$RUN_RC"
+assert_contains "dialog shown" "macOS 26.7.1 Available" "$RUN_LAUNCH"
+
+echo ""
+echo "--- No order, user already chose Install Tonight for 26.7.1 this evening: silent ---"
+reset_defaults
+queuedNow=$(date "+%Y-%m-%d %H:%M:%S")
+tonight_queued "26.7.1" "$queuedNow"
+run_reminder
+assert_eq "exits 0" "0" "$RUN_RC"
+assert_contains "logs suppression" "already chose Install Tonight for macOS 26.7.1" "$RUN_OUT"
+assert_eq "launches nothing" "" "$RUN_LAUNCH"
+
+echo ""
+echo "--- Install Tonight queued two days ago and Mac still behind: reminder resumes ---"
+reset_defaults
+tonight_queued "26.7.1" "$(date -v-2d "+%Y-%m-%d %H:%M:%S")"
+run_reminder
+assert_contains "dialog shown" "macOS 26.7.1 Available" "$RUN_LAUNCH"
+
+echo ""
+echo "--- Mac restored onto 27.0 with pin 26: nudged to 27.0.1, not ignored ---"
+reset_defaults
+export STUB_OS_VERSION="27.0" STUB_OS_BUILD="26A428"
+su_offers "27.0.1"
+run_reminder 26
+assert_contains "effective cap logged" "Effective major cap: 27" "$RUN_OUT"
+assert_contains "dialog for 27.0.1" "macOS 27.0.1 Available" "$RUN_LAUNCH"
+
+echo ""
+echo "--- Mac on 26.6.2 with pin 26 never hears about 27 ---"
+reset_defaults
+run_reminder 26
+assert_contains "dialog for 26.7.1" "macOS 26.7.1 Available" "$RUN_LAUNCH"
+assert_not_contains "never mentions 27" "27.0" "$RUN_LAUNCH"
+
+echo ""
+echo "--- Mac already on the newest build: silent ---"
+reset_defaults
+export STUB_OS_VERSION="26.7.1" STUB_OS_BUILD="25G241"
+run_reminder
+assert_eq "exits 0" "0" "$RUN_RC"
+assert_contains "verified" "VERIFIED" "$RUN_OUT"
+assert_eq "launches nothing" "" "$RUN_LAUNCH"
+
+echo ""
+echo "--- Active DDM order for 26.7 while SOFA has 26.7.1 inside its hold: DDM dialog for 26.7 only ---"
+reset_defaults
+write_sofa "$FRESH" "$CLEARED"
+deadlineLocal=$(date -v+5d "+%Y-%m-%dT21:00:00")
+ddm_order "26.7" "$deadlineLocal"
+su_nothing   # Software Update goes quiet under enforcement; the DDM path must not consult it
+run_reminder
+expectedDeadline=$(date -jf "%Y-%m-%dT%H:%M:%S" "$deadlineLocal" "+%A, %b %d at %I:%M %p")
+assert_eq "exits 0" "0" "$RUN_RC"
+assert_contains "logs the enforcement" "Found active enforcement: macOS 26.7 by $deadlineLocal" "$RUN_OUT"
+assert_contains "title" "Software Update Required: macOS 26.7" "$RUN_LAUNCH"
+assert_contains "infobox shows the enforced version" "**Required macOS:** :green[26.7]" "$RUN_LAUNCH"
+assert_contains "deadline" "**Deadline:** $expectedDeadline" "$RUN_LAUNCH"
+assert_contains "overlay" "--overlayicon" "$RUN_LAUNCH"
+assert_contains "button" "Open Software Update" "$RUN_LAUNCH"
+assert_not_contains "never the held 26.7.1" "26.7.1" "$RUN_LAUNCH"
+
+echo ""
+echo "--- DDM order, Install Tonight queued for it, deadline days away: silent today ---"
+reset_defaults
+ddm_order "26.7" "$deadlineLocal"
+tonight_queued "26.7" "$(date "+%Y-%m-%d %H:%M:%S")"
+run_reminder
+assert_eq "exits 0" "0" "$RUN_RC"
+assert_contains "logs suppression" "already chose Install Tonight for macOS 26.7" "$RUN_OUT"
+assert_eq "launches nothing" "" "$RUN_LAUNCH"
+
+echo ""
+echo "--- DDM order, Install Tonight queued, but the deadline is before tonight's window: still reminded ---"
+nowHM=$(date "+%H%M")
+if [[ "$nowHM" > "0129" && "$nowHM" < "0200" ]]; then
+    echo "  SKIP: a 30-minute deadline lands after the 2 AM window at this time of night"
+else
+    reset_defaults
+    ddm_order "26.7" "$(date -v+30M "+%Y-%m-%dT%H:%M:00")"
+    tonight_queued "26.7" "$(date "+%Y-%m-%d %H:%M:%S")"
+    run_reminder
+    assert_contains "dialog shown" "Software Update Required: macOS 26.7" "$RUN_LAUNCH"
+fi
 
 # ============================================================
 echo ""
