@@ -17,8 +17,8 @@
 # 6. Daily Nudge Without DDM: with no DDM enforcement, recommends the newest
 #    release only after it has cleared a release hold AND Software Update on the
 #    Mac is offering it.
-# 7. Respectful Timing: waits out meetings and presentations, and stays quiet on
-#    a day the user already chose Install Tonight.
+# 7. Respectful Timing: waits out meetings and presentations before showing the
+#    dialog.
 # 8. User-Driven Settings: the dialog's button opens Software Update; nothing
 #    opens on its own.
 ####################################################################################################
@@ -74,9 +74,6 @@ releaseHoldDays=2
 
 # Seconds to wait for `softwareupdate --list` before giving up quietly
 softwareUpdateListSeconds=90
-
-# Apple's software update log, read for the user's Install Tonight choice
-installLogPath="/var/log/install.log"
 
 # Log and lock for the presenter that waits out meetings and shows the dialog
 reminderLogPath="/var/log/update_reminder.log"
@@ -467,43 +464,6 @@ list_offered_updates() {
     return 0
 }
 
-# install_tonight_pending <version> <installLogLines> <nowEpoch> [deadlineEpoch]
-#
-# Returns 0 when the user has already chosen Install Tonight for this version
-# in Software Update and tonight's install window has not started yet, so a
-# reminder today would only repeat what they already did. installLogLines are
-# the "Updates queued for later: [" and "Updated install tonight state" lines
-# from /var/log/install.log. The newest of each decides: the state must be
-# enabled = true and the queue must name this version. Software Update runs
-# queued installs from 02:00 local time; once that time passes and the Mac is
-# still behind, the install did not happen and reminders resume. When a DDM
-# deadline falls before the window, the reminder is never suppressed.
-install_tonight_pending() {
-    local version="$1"
-    local logLines="$2"
-    local nowEpoch="$3"
-    local deadlineEpoch="$4"
-    local lastState lastQueue stateEpoch stateDay windowEpoch
-    [[ -z "$version" || -z "$logLines" ]] && return 1
-    lastState=$(echo "$logLines" | grep 'Updated install tonight state' | tail -n 1)
-    lastQueue=$(echo "$logLines" | grep 'Updates queued for later: \[' | tail -n 1)
-    [[ "$lastState" == *"(enabled = true"* ]] || return 1
-    [[ "$lastQueue" == *"_${version}_"* ]] || return 1
-    stateEpoch=$(date -jf "%Y-%m-%d %H:%M:%S" "${lastState[1,19]}" "+%s" 2>/dev/null)
-    [[ "$stateEpoch" =~ ^[0-9]+$ ]] || return 1
-    stateDay=$(date -jf "%s" "$stateEpoch" "+%Y-%m-%d")
-    windowEpoch=$(date -jf "%Y-%m-%d %H:%M:%S" "$stateDay 02:00:00" "+%s" 2>/dev/null)
-    if (( windowEpoch <= stateEpoch )); then
-        windowEpoch=$(date -v+1d -jf "%Y-%m-%d %H:%M:%S" "$stateDay 02:00:00" "+%s" 2>/dev/null)
-    fi
-    [[ "$windowEpoch" =~ ^[0-9]+$ ]] || return 1
-    (( nowEpoch < windowEpoch )) || return 1
-    if [[ -n "$deadlineEpoch" ]] && (( deadlineEpoch <= windowEpoch )); then
-        return 1
-    fi
-    return 0
-}
-
 # meeting_in_progress <pmsetAssertionsText> <app>...
 #
 # Returns 0 when `pmset -g assertions` shows a listed meeting or presentation app
@@ -753,15 +713,6 @@ else
         *) echo "WARNING: SOFA has no usable ReleaseDate for macOS $latestVersion - cannot apply the release hold. Exiting."
            exit 0 ;;
     esac
-fi
-
-# The user already chose Install Tonight for this version: today's reminder would only repeat it
-if [[ "$demoMode" != "true" && -r "$installLogPath" ]]; then
-    tonightLines=$(grep -a -E 'Updated install tonight state|Updates queued for later: \[' "$installLogPath" 2>/dev/null)
-    if install_tonight_pending "$reminderVersion" "$tonightLines" "$nowEpoch" "$deadlineEpoch"; then
-        echo "User already chose Install Tonight for macOS $reminderVersion - no reminder today. Exiting."
-        exit 0
-    fi
 fi
 
 # With no enforcement, only recommend what Software Update on this Mac is actually offering

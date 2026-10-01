@@ -14,6 +14,10 @@
 - The version pin (parameter 4) caps a Mac at the higher of the pin and its
   current major, so a Mac already on a newer major still gets that major's
   updates.
+- Choosing Install Tonight doesn't stop the reminder. Install Tonight isn't
+  reliable on Macs with a Software Update deferral (a queued 27.0.1 never
+  installed on a test Mac), so the reminder keeps going until the Mac is
+  updated.
 
 ### Added
 - Meeting check. While Teams, Zoom, Webex, a PowerPoint slide show, Keynote or
@@ -21,9 +25,6 @@
   dialog waits, checking every 5 minutes for up to 75 minutes. A meeting that
   outlasts the wait skips a no-enforcement nudge for the day; a DDM reminder is
   shown anyway. Skipped within 24 hours of a DDM deadline.
-- Install Tonight check. If `install.log` shows the user queued this version
-  for tonight and the 2:00 AM window hasn't started, the reminder is skipped
-  for the day. A DDM deadline before the window overrides it.
 - The dialog runs in a detached presenter so the Jamf policy finishes in
   seconds. The presenter logs to `/var/log/update_reminder.log`, uses a lock so
   a second run can't stack another dialog, and skips the dialog if the console

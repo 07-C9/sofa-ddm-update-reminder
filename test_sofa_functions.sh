@@ -552,24 +552,6 @@ assert_return "a macOS title with the OS name still matches" 0 su_offers_version
 
 # ============================================================
 echo ""
-echo "=== Test Suite: Install Tonight detection ==="
-TONIGHT_QUEUED=$(cat "$SCRIPT_DIR/fixtures/install_log_tonight_queued.txt")
-TONIGHT_CANCELED=$(cat "$SCRIPT_DIR/fixtures/install_log_tonight_canceled.txt")
-queuedAt=$(date -jf "%Y-%m-%d %H:%M:%S" "2026-09-30 17:47:28" "+%s")
-windowStart=$(date -jf "%Y-%m-%d %H:%M:%S" "2026-10-01 02:00:00" "+%s")
-assert_return "queued for tonight, evening: pending" 0 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( queuedAt + 60 ))
-assert_return "one second before the 2 AM window: pending" 0 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( windowStart - 1 ))
-assert_return "window started and Mac still behind: not pending" 1 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" "$windowStart"
-assert_return "next afternoon (stale queue): not pending" 1 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( windowStart + 12*3600 ))
-assert_return "different version queued: not pending" 1 install_tonight_pending "26.7.1" "$TONIGHT_QUEUED" $(( queuedAt + 60 ))
-assert_return "27.0.10 does not match a queue of 27.0.1" 1 install_tonight_pending "27.0.10" "$TONIGHT_QUEUED" $(( queuedAt + 60 ))
-assert_return "user canceled: not pending" 1 install_tonight_pending "27.0.1" "$TONIGHT_CANCELED" $(( queuedAt + 3600 ))
-assert_return "no install log lines: not pending" 1 install_tonight_pending "27.0.1" "" $(( queuedAt + 60 ))
-assert_return "deadline before the window: not pending" 1 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( queuedAt + 60 )) $(( windowStart - 600 ))
-assert_return "deadline after the window: pending" 0 install_tonight_pending "27.0.1" "$TONIGHT_QUEUED" $(( queuedAt + 60 )) $(( windowStart + 86400 ))
-
-# ============================================================
-echo ""
 echo "=== Test Suite: meeting detection ==="
 MEETING_APPS=( "MSTeams" "zoom.us" "Webex" "Slide Show" "Keynote" "Blink Wake Lock" )
 PMSET_IDLE=$(cat "$SCRIPT_DIR/fixtures/pmset_assertions_idle.txt")

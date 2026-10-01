@@ -365,43 +365,6 @@ list_offered_updates() {
     return 0
 }
 
-# install_tonight_pending <version> <installLogLines> <nowEpoch> [deadlineEpoch]
-#
-# Returns 0 when the user has already chosen Install Tonight for this version
-# in Software Update and tonight's install window has not started yet, so a
-# reminder today would only repeat what they already did. installLogLines are
-# the "Updates queued for later: [" and "Updated install tonight state" lines
-# from /var/log/install.log. The newest of each decides: the state must be
-# enabled = true and the queue must name this version. Software Update runs
-# queued installs from 02:00 local time; once that time passes and the Mac is
-# still behind, the install did not happen and reminders resume. When a DDM
-# deadline falls before the window, the reminder is never suppressed.
-install_tonight_pending() {
-    local version="$1"
-    local logLines="$2"
-    local nowEpoch="$3"
-    local deadlineEpoch="$4"
-    local lastState lastQueue stateEpoch stateDay windowEpoch
-    [[ -z "$version" || -z "$logLines" ]] && return 1
-    lastState=$(echo "$logLines" | grep 'Updated install tonight state' | tail -n 1)
-    lastQueue=$(echo "$logLines" | grep 'Updates queued for later: \[' | tail -n 1)
-    [[ "$lastState" == *"(enabled = true"* ]] || return 1
-    [[ "$lastQueue" == *"_${version}_"* ]] || return 1
-    stateEpoch=$(date -jf "%Y-%m-%d %H:%M:%S" "${lastState[1,19]}" "+%s" 2>/dev/null)
-    [[ "$stateEpoch" =~ ^[0-9]+$ ]] || return 1
-    stateDay=$(date -jf "%s" "$stateEpoch" "+%Y-%m-%d")
-    windowEpoch=$(date -jf "%Y-%m-%d %H:%M:%S" "$stateDay 02:00:00" "+%s" 2>/dev/null)
-    if (( windowEpoch <= stateEpoch )); then
-        windowEpoch=$(date -v+1d -jf "%Y-%m-%d %H:%M:%S" "$stateDay 02:00:00" "+%s" 2>/dev/null)
-    fi
-    [[ "$windowEpoch" =~ ^[0-9]+$ ]] || return 1
-    (( nowEpoch < windowEpoch )) || return 1
-    if [[ -n "$deadlineEpoch" ]] && (( deadlineEpoch <= windowEpoch )); then
-        return 1
-    fi
-    return 0
-}
-
 # meeting_in_progress <pmsetAssertionsText> <app>...
 #
 # Returns 0 when `pmset -g assertions` shows a listed meeting or presentation app

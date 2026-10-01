@@ -1,6 +1,6 @@
 #!/bin/zsh
 # ABOUTME: End-to-end tests for the update reminder script, run under Jamf-like conditions with stubbed system commands.
-# ABOUTME: Covers the no-order nudge gates, the DDM dialog, Install Tonight, meeting waits and the detached presenter.
+# ABOUTME: Covers the release hold, the Software Update check, the DDM dialog, meeting waits and the detached presenter.
 
 SCRIPT_DIR="${0:A:h}"
 REMINDER="$SCRIPT_DIR/update_reminder.sh"
@@ -137,7 +137,7 @@ sed -e "s|^ddmPlistPath=.*|ddmPlistPath=\"$DDM_PLIST\"|" \
     -e "s|^reminderPidPath=.*|reminderPidPath=\"$REMINDER_PID\"|" \
     -e "s|^softwareUpdateListSeconds=.*|softwareUpdateListSeconds=2|" \
     "$REMINDER" > "$SCRIPT_COPY"
-for check in "^ddmPlistPath=\"$DDM_PLIST\"" "^swiftDialogPath=\"$STUBS/dialog\"" "^installLogPath=\"$INSTALL_LOG\"" \
+for check in "^ddmPlistPath=\"$DDM_PLIST\"" "^swiftDialogPath=\"$STUBS/dialog\"" \
              "^reminderLogPath=\"$REMINDER_LOG\"" "^reminderPidPath=\"$REMINDER_PID\"" "^softwareUpdateListSeconds=2"; do
     if ! grep -q "$check" "$SCRIPT_COPY"; then
         echo "FATAL: script copy is missing redirect $check"
@@ -177,7 +177,9 @@ ddm_order() {
     write_ddm_plist "{\"SUCorePersistedStatePolicyFields\":{\"Declarations\":{\"Blueprint_test_sys_cfg\":{\"TargetOSVersion\":\"$1\",\"TargetLocalDateTime\":\"$2\"}}}}"
 }
 
-# tonight_queued <version> <localTimestamp>: install.log lines for an Install Tonight choice
+# tonight_queued <version> <localTimestamp>: install.log lines for an Install Tonight choice. The script
+# ignores Install Tonight; the redirect of installLogPath above stays so these scenarios catch it if
+# a check that reads install.log ever comes back.
 tonight_queued() {
     printf '%s-07 TESTMAC001 SoftwareUpdateSettingsExtension[1]: x: Updates queued for later: [<SUOSUProduct: MSU_UPDATE_25X000_patch_%s_minor>], mode: SUOSULaterMode(rawValue: 1)\n%s-07 TESTMAC001 SoftwareUpdateSettingsExtension[1]: x: Updated install tonight state (enabled = true, restart = true)\n' "$2" "$1" "$2" > "$INSTALL_LOG"
 }
@@ -337,20 +339,12 @@ assert_eq "exits 0" "0" "$RUN_RC"
 assert_contains "dialog shown" "macOS 26.7.1 Available" "$RUN_LAUNCH"
 
 echo ""
-echo "--- No order, user already chose Install Tonight for 26.7.1 this evening: silent ---"
+echo "--- No order, user chose Install Tonight this evening: still reminded (Install Tonight is not trusted) ---"
 reset_defaults
-queuedNow=$(date "+%Y-%m-%d %H:%M:%S")
-tonight_queued "26.7.1" "$queuedNow"
+tonight_queued "26.7.1" "$(date "+%Y-%m-%d %H:%M:%S")"
 run_reminder
 assert_eq "exits 0" "0" "$RUN_RC"
-assert_contains "logs suppression" "already chose Install Tonight for macOS 26.7.1" "$RUN_OUT"
-assert_eq "launches nothing" "" "$RUN_LAUNCH"
-
-echo ""
-echo "--- Install Tonight queued two days ago and Mac still behind: reminder resumes ---"
-reset_defaults
-tonight_queued "26.7.1" "$(date -v-2d "+%Y-%m-%d %H:%M:%S")"
-run_reminder
+assert_not_contains "no Install Tonight suppression" "Install Tonight" "$RUN_OUT"
 assert_contains "dialog shown" "macOS 26.7.1 Available" "$RUN_LAUNCH"
 
 echo ""
@@ -397,27 +391,14 @@ assert_contains "button" "Open Software Update" "$RUN_LAUNCH"
 assert_not_contains "never the held 26.7.1" "26.7.1" "$RUN_LAUNCH"
 
 echo ""
-echo "--- DDM order, Install Tonight queued for it, deadline days away: silent today ---"
+echo "--- DDM order, user chose Install Tonight for it: still reminded ---"
 reset_defaults
 ddm_order "26.7" "$deadlineLocal"
 tonight_queued "26.7" "$(date "+%Y-%m-%d %H:%M:%S")"
 run_reminder
 assert_eq "exits 0" "0" "$RUN_RC"
-assert_contains "logs suppression" "already chose Install Tonight for macOS 26.7" "$RUN_OUT"
-assert_eq "launches nothing" "" "$RUN_LAUNCH"
-
-echo ""
-echo "--- DDM order, Install Tonight queued, but the deadline is before tonight's window: still reminded ---"
-nowHM=$(date "+%H%M")
-if [[ "$nowHM" > "0129" && "$nowHM" < "0200" ]]; then
-    echo "  SKIP: a 30-minute deadline lands after the 2 AM window at this time of night"
-else
-    reset_defaults
-    ddm_order "26.7" "$(date -v+30M "+%Y-%m-%dT%H:%M:00")"
-    tonight_queued "26.7" "$(date "+%Y-%m-%d %H:%M:%S")"
-    run_reminder
-    assert_contains "dialog shown" "Software Update Required: macOS 26.7" "$RUN_LAUNCH"
-fi
+assert_not_contains "no Install Tonight suppression" "Install Tonight" "$RUN_OUT"
+assert_contains "dialog shown" "Software Update Required: macOS 26.7" "$RUN_LAUNCH"
 
 echo ""
 echo "--- Meeting for the first 2 checks, then free: dialog after the wait ---"

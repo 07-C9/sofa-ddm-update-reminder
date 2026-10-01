@@ -27,10 +27,13 @@ Software Update.
   newer major than the pin is capped at its own major instead, so it still
   gets that major's updates.
 - **Timing.** The dialog waits while a meeting or presentation is on screen
-  (up to 75 minutes), skips the day if the user already chose Install Tonight
-  for that version, and opens Software Update only when the user clicks
+  (up to 75 minutes), and opens Software Update only when the user clicks
   **Open Software Update**. **Later** closes the dialog, and an unanswered
   dialog closes itself after 4 hours so the next day's reminder can run.
+  Choosing Install Tonight in Software Update doesn't stop the reminder.
+  Install Tonight isn't reliable on Macs with a Software Update deferral (a
+  queued 27.0.1 never installed on a test Mac), so the reminder keeps going
+  until the Mac is updated.
 
 ## Requirements
 
@@ -75,7 +78,6 @@ All settings are plain variables in the CONFIGURATION block.
 | `demoMode` | `false` | `true` shows the dialog on any Mac, for UI testing |
 | `releaseHoldDays` | `2` | Days a new release is held before a no-enforcement nudge recommends it |
 | `softwareUpdateListSeconds` | `90` | Time limit for `softwareupdate --list` |
-| `installLogPath` | `/var/log/install.log` | Read for the user's Install Tonight choice |
 | `reminderLogPath` | `/var/log/update_reminder.log` | Log written by the presenter (meeting waits, button clicks) |
 | `reminderPidPath` | `/var/run/update_reminder.pid` | Lock that stops a second reminder while one is waiting or on screen |
 | `meetingAssertionApps` | Teams, Zoom, Webex, Slide Show, Keynote, Blink Wake Lock | Apps or assertion names that count as a meeting or presentation |
@@ -94,10 +96,7 @@ All settings are plain variables in the CONFIGURATION block.
    the release hold against SOFA's `ReleaseDate`, then check that
    `softwareupdate --list` offers that exact version. Either check failing
    means no dialog today.
-4. If `install.log` shows the user queued this version with Install Tonight
-   and tonight's 2:00 AM window hasn't started, skip today. A DDM deadline
-   that falls before the window overrides this.
-5. Hand the dialog to a background presenter and exit, so the Jamf policy
+4. Hand the dialog to a background presenter and exit, so the Jamf policy
    finishes in seconds. The presenter waits out meetings, then shows the
    dialog. If a meeting outlasts the wait, a no-enforcement nudge is skipped
    for the day and a DDM reminder is shown anyway. Within 24 hours of a DDM
@@ -125,8 +124,8 @@ Two suites, both run from the repo folder:
 ```
 
 `test_sofa_functions.sh` unit-tests the decision functions in
-`sofa_functions.sh` against fixtures (captured `softwareupdate`, `install.log`
-and `pmset` output in `fixtures/`) and the live SOFA feed. It also checks that
+`sofa_functions.sh` against fixtures (captured `softwareupdate` and `pmset`
+output in `fixtures/`) and the live SOFA feed. It also checks that
 every shared function in `update_reminder.sh` is byte-identical to its copy in
 `sofa_functions.sh`, since the deployed script has to be self-contained. If the
 live-feed tests start failing, SOFA's schema has probably changed.
@@ -134,9 +133,9 @@ live-feed tests start failing, SOFA's schema has probably changed.
 `test_update_reminder.sh` runs a copy of the real script end to end the way
 Jamf runs it (SIGPIPE ignored, no stdin, behind a watchdog), with stubbed
 system commands. It covers the release hold, the Software Update check, the
-DDM dialog, Install Tonight,
-meeting waits, the button results, the run lock, and that the script returns
-while the presenter is still waiting.
+DDM dialog, reminders after Install Tonight, meeting waits, the button
+results, the run lock, and that the script returns while the presenter is
+still waiting.
 
 To try the script on a Mac:
 
@@ -153,9 +152,6 @@ Mac that is already current.
   Access on macOS 26 and later.
 - The Keynote entry in `meetingAssertionApps` hasn't been checked against a
   real Keynote presentation.
-- Install Tonight detection depends on the `install.log` wording macOS 26 and
-  27 use. If Apple changes it, the script stops suppressing and reminds as
-  usual.
 
 ## Credits
 
