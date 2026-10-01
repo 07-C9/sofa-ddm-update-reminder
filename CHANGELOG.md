@@ -28,7 +28,12 @@
   seconds. The presenter logs to `/var/log/update_reminder.log`, uses a lock so
   a second run can't stack another dialog, and skips the dialog if the console
   user changed while it waited.
-- `softwareupdate --list` runs under a time limit (`softwareUpdateListSeconds`).
+- `softwareupdate --list` runs under a time limit (`softwareUpdateListSeconds`)
+  and is force-stopped if it ignores SIGTERM.
+- An unanswered dialog closes itself after `dialogTimeoutSeconds` (4 hours) and
+  is logged, so an ignored reminder can't hold the lock and block the next day's.
+- The macOS icon downloads with a time limit into a private per-run folder under
+  `/var/tmp` that is removed when the presenter ends, instead of a fixed path.
 - End-to-end test suite (`test_update_reminder.sh`) that runs the real script
   under Jamf-like conditions, plus a test that keeps the script's functions
   identical to `sofa_functions.sh`. Fixtures captured from real Macs live in

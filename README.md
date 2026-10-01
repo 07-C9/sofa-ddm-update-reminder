@@ -29,7 +29,8 @@ Software Update.
 - **Timing.** The dialog waits while a meeting or presentation is on screen
   (up to 75 minutes), skips the day if the user already chose Install Tonight
   for that version, and opens Software Update only when the user clicks
-  **Open Software Update**. **Later** closes the dialog.
+  **Open Software Update**. **Later** closes the dialog, and an unanswered
+  dialog closes itself after 4 hours so the next day's reminder can run.
 
 ## Requirements
 
@@ -80,6 +81,7 @@ All settings are plain variables in the CONFIGURATION block.
 | `meetingAssertionApps` | Teams, Zoom, Webex, Slide Show, Keynote, Blink Wake Lock | Apps or assertion names that count as a meeting or presentation |
 | `meetingCheckSeconds` | `300` | Seconds between meeting checks |
 | `meetingMaxChecks` | `15` | Checks before giving up (300 x 15 = 75 minutes) |
+| `dialogTimeoutSeconds` | `14400` | Seconds before an unanswered dialog closes itself (4 hours) |
 | `softwareUpdateURL` | Software Update pane | Opened when the user clicks **Open Software Update** |
 
 ## How the decision is made
@@ -109,7 +111,8 @@ deferral.
 ## Logs
 
 The Jamf policy log shows every decision the main script makes. The
-presenter writes its own lines (meeting checks, button clicks, skips) to
+presenter writes its own lines (meeting checks, button clicks, timeouts,
+skips) to
 `/var/log/update_reminder.log` on the Mac.
 
 ## Testing
