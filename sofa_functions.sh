@@ -234,3 +234,23 @@ is_version_for_device() {
 
     return 1
 }
+
+# effective_major_cap <pin> <currentVersion>
+#
+# The version pin (Jamf parameter 4) holds Macs below it back from a newer major.
+# It never stops a Mac that is already on a newer major, for example one restored
+# onto macOS 27, from getting that major's own updates. Outputs the cap to use:
+# the higher of the pin and the current major, or empty when no pin is set.
+effective_major_cap() {
+    local pin="$1"
+    local currentMajor="${2%%.*}"
+    if [[ -z "$pin" ]]; then
+        echo ""
+        return 0
+    fi
+    if [[ "$currentMajor" =~ ^[0-9]+$ ]] && (( currentMajor > pin )); then
+        echo "$currentMajor"
+    else
+        echo "$pin"
+    fi
+}

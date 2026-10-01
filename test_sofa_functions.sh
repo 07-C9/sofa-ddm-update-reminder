@@ -509,6 +509,15 @@ done
 
 # ============================================================
 echo ""
+echo "=== Test Suite: effective_major_cap ==="
+assert_eq "no pin means no cap" "" "$(effective_major_cap "" "26.7.1")"
+assert_eq "pin above current major holds at pin" "26" "$(effective_major_cap "26" "15.7.5")"
+assert_eq "pin equal to current major" "26" "$(effective_major_cap "26" "26.6.2")"
+assert_eq "Mac already on 27 with pin 26 caps at 27" "27" "$(effective_major_cap "26" "27.0")"
+assert_eq "garbage current version keeps the pin" "26" "$(effective_major_cap "26" "")"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"

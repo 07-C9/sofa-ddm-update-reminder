@@ -51,9 +51,11 @@ demoMode="false"
 # Maximum major macOS version to recommend (Jamf script parameter 4).
 # Set to e.g. "26" to hold the fleet on macOS 26 while a newer major (27) is
 # hidden via a Blueprint or deferral: the script then recommends the newest
-# 26.x this hardware supports and never suggests 27. Applies to both the
-# standard reminder and DDM enforcement. Leave blank ($4 unset) to always
-# recommend the newest supported version.
+# 26.x this hardware supports and never suggests 27. A Mac already on a newer
+# major than the pin (e.g. restored onto 27) is capped at its own major instead,
+# so it still gets that major's updates. Applies to both the standard reminder
+# and DDM enforcement. Leave blank ($4 unset) to always recommend the newest
+# supported version.
 maxMajorPin="$4"
 if [[ -n "$maxMajorPin" && ! "$maxMajorPin" =~ ^[0-9]+$ ]]; then
     echo "WARNING: Ignoring non-numeric version pin '$maxMajorPin' (parameter 4)."
@@ -299,6 +301,26 @@ find_enforced_update() {
     return 1
 }
 
+# effective_major_cap <pin> <currentVersion>
+#
+# The version pin (Jamf parameter 4) holds Macs below it back from a newer major.
+# It never stops a Mac that is already on a newer major, for example one restored
+# onto macOS 27, from getting that major's own updates. Outputs the cap to use:
+# the higher of the pin and the current major, or empty when no pin is set.
+effective_major_cap() {
+    local pin="$1"
+    local currentMajor="${2%%.*}"
+    if [[ -z "$pin" ]]; then
+        echo ""
+        return 0
+    fi
+    if [[ "$currentMajor" =~ ^[0-9]+$ ]] && (( currentMajor > pin )); then
+        echo "$currentMajor"
+    else
+        echo "$pin"
+    fi
+}
+
 # --- Internal constants ---
 scriptVersion="6.11-Universal"
 sofaURL="https://sofafeed.macadmins.io/v2/macos_data_feed.json"
@@ -332,7 +354,8 @@ if [[ -z "$boardID" ]]; then
     boardID=$(ioreg -d2 -c IOPlatformExpertDevice | awk -F'"' '/board-id/{print $4}')
 fi
 echo "Device: $boardID | Current: $currentVersion ($currentBuild)"
-echo "Version pin: ${maxMajorPin:-none (recommend newest supported)}"
+majorCap=$(effective_major_cap "$maxMajorPin" "$currentVersion")
+echo "Version pin: ${maxMajorPin:-none (recommend newest supported)} | Effective major cap: ${majorCap:-none}"
 
 if [[ "$demoMode" == "true" ]]; then
     echo "DEMO MODE: Skipping SOFA check, forcing dialog display."
@@ -363,7 +386,7 @@ else
     # Find the newest release this hardware supports across ALL OS versions.
     # Walks from newest OS (e.g., Tahoe) to oldest. A macOS 15 machine whose
     # hardware supports Tahoe will be targeted for Tahoe, not stuck on 15.
-    targetResult=$(find_target_for_device "$boardID" "$sofaData" "$maxMajorPin")
+    targetResult=$(find_target_for_device "$boardID" "$sofaData" "$majorCap")
     if [[ $? -ne 0 || -z "$targetResult" ]]; then
         echo "ERROR: No supported OS version found for $boardID in SOFA feed. Exiting."
         exit 0
@@ -434,7 +457,7 @@ if [[ -f "$ddmPlistPath" ]]; then
         ')
 
         # Filter entries by compliance and hardware compatibility, pick earliest deadline
-        enforcedResult=$(find_enforced_update "$ddmEntries" "$currentVersion" "$boardID" "$sofaData" "$maxMajorPin")
+        enforcedResult=$(find_enforced_update "$ddmEntries" "$currentVersion" "$boardID" "$sofaData" "$majorCap")
         if [[ $? -eq 0 && -n "$enforcedResult" ]]; then
             ddmVersion=$(echo "$enforcedResult" | cut -d'|' -f1)
             ddmDeadline=$(echo "$enforcedResult" | cut -d'|' -f2)
