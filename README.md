@@ -37,7 +37,8 @@ Software Update.
 
 ## Requirements
 
-- macOS 14 or newer (tested on 14, 15 and 26)
+- macOS 14 or newer (6.12 tested on macOS 26 and 27; earlier versions on 14
+  and 15)
 - [swiftDialog](https://github.com/swiftDialog/swiftDialog) at
   `/usr/local/bin/dialog`
 - Jamf Pro, or any MDM that can run a zsh script as root
@@ -51,7 +52,9 @@ Software Update.
    `support_ticket_url`.
 3. Label script parameter 4 "Maximum major version". In the policy, set it to
    the newest major you want users moved to (for example `26`), or leave it
-   blank to always recommend the newest supported release.
+   blank to always recommend the newest supported release. Macs already on a
+   newer major are capped at their own major, so one policy with `26` nudges
+   26 Macs to the newest 26.x and 27 Macs to the newest 27.x.
 4. Scope to a smart computer group built on patch reporting for the current
    macOS target. Example, "1, Tahoe = Outdated":
 
@@ -65,6 +68,10 @@ Software Update.
    whose patch status isn't known yet (new enrollments, offline Macs). The
    script does the per-device targeting inside that group. A once-a-day policy
    works well. The script exits in about a second when the Mac is current.
+
+   With more than one major in the fleet, add the matching group for each
+   major to the same policy, for example "1, Golden Gate = Outdated" built the
+   same way on the "Apple macOS Golden Gate" patch title.
 
 ## Configuration
 
